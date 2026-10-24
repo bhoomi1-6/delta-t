@@ -25,7 +25,7 @@ local OAuth consent flow and saves a refresh token to
 `GOOGLE_CALENDAR_ID` to use another calendar.
 
 The backend can fetch busy blocks with `get_busy_events(start, end)` from
-`app.integrations.calendar`, where `start` and `end` are timezone-aware Python
+`app.integrations.google_calendar`, where `start` and `end` are timezone-aware Python
 datetimes. Cancelled and transparent events are excluded. Keep both credential
 files private and out of version control. These OAuth credentials are secrets;
 no API key is needed or should be added to source code. The local `.env` and
