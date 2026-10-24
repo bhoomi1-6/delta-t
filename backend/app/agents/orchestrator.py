@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from app.config import load_backend_environment
 from app.agents.intake import parse_plan
 from app.agents.schemas import Plan
 from app.integrations.google_calendar import get_busy_events
@@ -20,7 +21,7 @@ from app.integrations.router import get_route_durations_by_arrival
 from app.integrations.weather import get_oxford_weather
 
 LOCAL_TIMEZONE = ZoneInfo("Europe/London")
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 class _ProposedTaskTime(BaseModel):
@@ -158,6 +159,7 @@ def review_day(
     if not starting_location.strip():
         raise ValueError("Starting location cannot be empty.")
 
+    load_backend_environment()
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set.")

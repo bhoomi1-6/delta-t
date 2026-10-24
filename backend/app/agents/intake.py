@@ -8,9 +8,10 @@ import os
 from google import genai
 from google.genai import types
 
+from app.config import load_backend_environment
 from app.agents.schemas import Plan
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 def parse_plan(description: str) -> Plan:
@@ -18,6 +19,7 @@ def parse_plan(description: str) -> Plan:
     if not description.strip():
         raise ValueError("Plan description cannot be empty.")
 
+    load_backend_environment()
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError(

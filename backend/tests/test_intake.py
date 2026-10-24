@@ -1,8 +1,16 @@
 from types import SimpleNamespace
 
 import pytest
+from google.genai import _transformers
 
 from app.agents import intake
+from app.agents.schemas import Plan
+
+
+def test_plan_schema_is_accepted_by_gemini_sdk() -> None:
+    schema = _transformers.t_schema(None, Plan)
+
+    assert schema is not None
 
 
 def test_parse_plan_returns_validated_structured_output(
@@ -58,6 +66,7 @@ def test_parse_plan_requires_nonempty_description() -> None:
 
 
 def test_parse_plan_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(intake, "load_backend_environment", lambda: None)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):

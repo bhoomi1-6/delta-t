@@ -33,16 +33,22 @@ default credential/token filenames are ignored by git.
 
 ### Gemini day-planning agent
 
-From `backend/`, install the requirements and configure `GEMINI_API_KEY`,
-`GOOGLE_MAPS_API_KEY`, and Google Calendar OAuth credentials. Then run:
+From `backend/`, copy `.env.example` to `.env`, add your Gemini key, and
+configure Google Calendar OAuth as described above. A Maps key is optional:
+without it, the router uses built-in fallback travel estimates; with it, the
+router requests live Routes API estimates. The backend loads `backend/.env`
+automatically. Then run:
 
 ```bash
+cp .env.example .env
 source venv/bin/activate
 python -m pip install -r requirements.txt
-export GEMINI_API_KEY="your-gemini-api-key"
-export GOOGLE_MAPS_API_KEY="your-google-maps-api-key"
 python -m app.agents.orchestrator --starting-location "St. Catherine's College" "Meet Alex at 10 at the Mathematical Institute, finish the budget report by 3, and spend about an hour on email."
 ```
+
+Edit `backend/.env` locally and set `GEMINI_API_KEY`. Set
+`GOOGLE_MAPS_API_KEY` only if you want live route estimates. Never put real
+keys in `.env.example`. Both `.env` files are ignored by Git.
 
 The orchestrator parses the description, reads busy events from the selected
 Google Calendar, fetches Oxford weather and route estimates, and asks Gemini
