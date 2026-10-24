@@ -94,7 +94,7 @@ def _simulation_inputs(
             )
             meeting_ids[simulation_title] = event.id
             display_names[simulation_title] = event.title
-    events.sort(key=lambda event: event.start)
+    events.sort(key=lambda event: event.start_time)
 
     task_order = {
         item.task_id: rank
