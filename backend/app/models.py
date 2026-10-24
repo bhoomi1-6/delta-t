@@ -30,7 +30,7 @@ class Event(BaseModel):
     title: str
     kind: EventKind
     duration: TriangularDist
-    start_time: int | None = None  # minutes from simulation start
+    start_time: int | None = None  # minutes since midnight of the simulated day (0-1439)
     location: str | None = None
     priority: int = Field(default=1, ge=0, le=2)  
 
