@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from google.auth.transport.requests import Request
@@ -15,6 +15,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 from dotenv import load_dotenv
+
+from app.models import Event, TriangularDist
 
 
 # ============================================================
@@ -40,32 +42,6 @@ SIMULATION_HOURS = 24
 # ============================================================
 # Event Models
 # ============================================================
-
-EventKind = Literal["deadline", "flexible", "travel", "fixed"]
-
-
-@dataclass(frozen=True)
-class Event:
-    """An event used by the Monte Carlo scheduling simulation.
-
-    Attributes:
-        id: Unique event identifier.
-        title: Name of the event.
-        kind: deadline, flexible, travel, or fixed.
-        duration: (minimum, mode, maximum) duration in minutes.
-        start_time: Integer minutes from simulation start, or None.
-        location: Event location, if available.
-        priority: Event priority (1-5).
-    """
-
-    id: str
-    title: str
-    kind: EventKind
-    duration: tuple[float, float, float]
-    start_time: int | None
-    location: str | None = None
-    priority: int = 3
-
 
 @dataclass(frozen=True)
 class CalendarBusyEvent:
@@ -376,14 +352,13 @@ def _to_simulation_event(
         id=event.event_id,
         title=event.summary,
         kind="fixed",
-        duration=(
-            duration_minutes,
-            duration_minutes,
-            duration_minutes,
+        duration=TriangularDist(
+            min=duration_minutes,
+            mode=duration_minutes,
+            max=duration_minutes,
         ),
         start_time=start_offset,
         location=event.location,
-        priority=3,
     )
 
 
@@ -395,6 +370,8 @@ def get_next_24_hours(
     calendar_id: str | None = None,
 ) -> tuple[datetime, datetime, list[Event]]:
     """Get simulation events for the next 24 hours from now.
+
+    Event start_time values are minutes from simulation_start.
 
     Returns:
         simulation_start: Current UTC datetime.

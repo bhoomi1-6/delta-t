@@ -1,4 +1,4 @@
-"""Pydantic models: Event, Task, Disruption (Plan, UncertaintyModel, SimResult to come)."""
+"""Pydantic models: Event, Task, Disruption"""
 from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
@@ -30,7 +30,7 @@ class Event(BaseModel):
     title: str
     kind: EventKind
     duration: TriangularDist
-    start_time: int | None = None  # minutes since midnight
+    start_time: int | None = None  # minutes from simulation start
     location: str | None = None
     priority: int = Field(default=1, ge=0, le=2)  
 
