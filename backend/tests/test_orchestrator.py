@@ -29,8 +29,11 @@ def test_collect_context_enriches_calendar_and_plan_events(
     )
     monkeypatch.setattr(
         orchestrator,
-        "get_oxford_weather",
-        lambda at: {"raining": True, "precipitation_mm": 1.2},
+        "get_oxford_weather_forecast",
+        lambda at: {
+            "precipitation_probability": 70.0,
+            "precipitation_mm": 1.2,
+        },
     )
     routes: list[tuple[str, str]] = []
 
@@ -64,7 +67,7 @@ def test_collect_context_enriches_calendar_and_plan_events(
     assert [item["title"] for item in conditions] == ["Lecture", "Project meeting"]
     assert routes == [("Home", "Lecture Hall"), ("Lecture Hall", "Department")]
     assert conditions[0]["weather"] == {
-        "raining": True,
+        "precipitation_probability": 70.0,
         "precipitation_mm": 1.2,
     }
 

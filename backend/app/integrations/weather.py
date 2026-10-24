@@ -39,3 +39,8 @@ def get_oxford_weather_forecast(target_datetime: datetime) -> dict:
         
     # Default fallback if offline or out of bounds
     return {"precipitation_probability": 0.0, "precipitation_mm": 0.0}
+
+
+def get_oxford_weather(target_datetime: datetime) -> dict:
+    """Compatibility alias for the Oxford weather forecast helper."""
+    return get_oxford_weather_forecast(target_datetime)

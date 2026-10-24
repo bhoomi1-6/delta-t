@@ -17,7 +17,7 @@ from app.agents.intake import parse_plan
 from app.agents.schemas import Plan
 from app.integrations.google_calendar import get_busy_events
 from app.integrations.router import get_route_durations_by_arrival
-from app.integrations.weather import get_oxford_weather
+from app.integrations.weather import get_oxford_weather_forecast
 from app.timeutil import LOCAL_TIMEZONE, at_minute, day_bounds
 
 DEFAULT_MODEL = "gemini-3.8-flash"
@@ -107,7 +107,7 @@ def _collect_context(
             "start": start.isoformat(),
             "source": item.source,
             "weather_location": "Oxford, UK",
-            "weather": get_oxford_weather(
+            "weather": get_oxford_weather_forecast(
                 start.astimezone(timezone.utc).replace(tzinfo=None)
             ),
         }
