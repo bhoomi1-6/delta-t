@@ -1,3 +1,4 @@
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -23,10 +24,10 @@ def test_parse_plan_returns_validated_structured_output(
           "id": "meeting-1",
           "title": "Meet Alex",
           "kind": "fixed",
-          "duration": {"min": 30, "mode": 45, "max": 60},
-          "start_time": 600,
-          "location": null,
-          "priority": 2
+          "std": 5,
+          "start_time": "2026-10-25T10:00:00",
+          "end_time": "2026-10-25T10:45:00",
+          "location": null
         }
       ],
       "tasks": [
@@ -34,8 +35,10 @@ def test_parse_plan_returns_validated_structured_output(
           "id": "report-1",
           "title": "Finish report",
           "estimated_length": 90,
+          "completion_pct": 0,
           "can_be_divided": false,
-          "deadline": 900
+          "deadline": "2026-10-25T15:00:00",
+          "priority": 1
         }
       ]
     }
@@ -53,11 +56,17 @@ def test_parse_plan_returns_validated_structured_output(
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
     monkeypatch.setattr(intake.genai, "Client", lambda **_: FakeClient())
 
-    plan = intake.parse_plan("Meet Alex at 10 and finish a report by 3.")
+    plan = intake.parse_plan(
+        "Meet Alex at 10 and finish a report by 3.",
+        plan_day=date(2026, 10, 25),
+    )
 
     assert plan.events[0].title == "Meet Alex"
-    assert plan.events[0].duration.mode == 45
-    assert plan.tasks[0].deadline == 900
+    assert plan.events[0].std == 5
+    assert plan.events[0].start_time == datetime(2026, 10, 25, 10)
+    assert plan.events[0].end_time == datetime(2026, 10, 25, 10, 45)
+    assert plan.tasks[0].deadline == datetime(2026, 10, 25, 15)
+    assert plan.tasks[0].priority == 1
 
 
 def test_parse_plan_requires_nonempty_description() -> None:

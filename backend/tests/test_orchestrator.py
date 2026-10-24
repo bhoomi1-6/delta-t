@@ -7,7 +7,7 @@ import pytest
 from app.agents import orchestrator
 from app.agents.schemas import Plan
 from app.integrations.google_calendar import CalendarBusyEvent
-from app.models import Event, TriangularDist
+from app.models import Event
 
 
 def test_collect_context_enriches_calendar_and_plan_events(
@@ -48,8 +48,9 @@ def test_collect_context_enriches_calendar_and_plan_events(
                 id="meeting-1",
                 title="Project meeting",
                 kind="fixed",
-                duration=TriangularDist(min=30, mode=30, max=30),
-                start_time=600,
+                std=0,
+                start_time=(now + timedelta(days=1)).replace(hour=10, minute=0),
+                end_time=(now + timedelta(days=1)).replace(hour=10, minute=30),
                 location="Department",
             )
         ],
@@ -88,16 +89,26 @@ def test_review_day_returns_review_without_changing_calendar(
         models = FakeModels()
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(orchestrator, "parse_plan", lambda _: Plan(events=[], tasks=[]))
+    monkeypatch.setattr(
+        orchestrator,
+        "parse_plan",
+        lambda *_args, **_kwargs: Plan(events=[], tasks=[]),
+    )
     monkeypatch.setattr(
         orchestrator,
         "_collect_context",
         lambda *args: ([{"id": "fixed-1"}], [{"event_id": "fixed-1"}]),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "compare_timelines",
+        lambda *_: {"measured_verdict": "unchanged"},
     )
     monkeypatch.setattr(orchestrator.genai, "Client", lambda **_: FakeClient())
 
     result = orchestrator.review_day("Plan my day", "Home")
 
     assert result["calendar_commitments"] == [{"id": "fixed-1"}]
-    assert result["review"]["reasoning"] == "Keep the meeting fixed."
-    assert result["review"]["proposed_plan"] == {"events": [], "tasks": []}
+    assert result["repair"]["reasoning"] == "Keep the meeting fixed."
+    assert result["repair"]["proposed_plan"] == {"events": [], "tasks": []}
+    assert result["judge"] == {"measured_verdict": "unchanged"}

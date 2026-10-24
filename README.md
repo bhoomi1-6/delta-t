@@ -61,10 +61,11 @@ are Oxford-specific. `GEMINI_MODEL` can override the default model.
 Calendar event titles, locations, the supplied plan, and fetched conditions are
 sent to Google's Gemini API for the review. Only run it with data you are
 comfortable sending to that service. Review the output; this prototype does not
-run the Monte Carlo simulator or independently prove that the proposed schedule
-is clash-free. Times in a plan without an explicit date are interpreted as the
-next matching time in the coming 24 hours. Keep all API keys and OAuth files
-private and out of source control.
+independently prove that the proposed schedule is clash-free. The intake agent
+uses the simulated date and local Europe/London datetimes for events and task
+deadlines. A task without a stated deadline is simulated as due at the end of
+the simulated day. Keep all API keys and OAuth files private and out of source
+control.
 
 ### Frontend (Node 20+)
 ```bash

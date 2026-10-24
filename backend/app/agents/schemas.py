@@ -1,18 +1,22 @@
 """Structured schemas used by AI agents."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from app.models import Event
 
 
 class PlanTask(BaseModel):
-    """Gemini-compatible task fields without unsupported exclusive bounds."""
+    """Gemini-compatible task input, adapted to the simulation Task model."""
 
     id: str
     title: str
     estimated_length: int = Field(ge=1)
+    completion_pct: float = Field(ge=0, le=100)
     can_be_divided: bool = False
-    deadline: int | None = None  # minutes since midnight
+    deadline: datetime | None = None
+    priority: int = Field(ge=0, le=2)
 
 
 class Plan(BaseModel):

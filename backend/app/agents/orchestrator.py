@@ -18,7 +18,7 @@ from app.agents.schemas import Plan
 from app.integrations.google_calendar import get_busy_events
 from app.integrations.router import get_route_durations_by_arrival
 from app.integrations.weather import get_oxford_weather_forecast
-from app.timeutil import at_minute, day_bounds
+from app.timeutil import day_bounds
 
 @dataclass(frozen=True)
 class _ItineraryItem:
@@ -63,11 +63,9 @@ def _collect_context(
         )
 
     for event in plan.events:
-        start = (
-            event.start_time
-            if isinstance(event.start_time, datetime)
-            else at_minute(day_start, event.start_time)
-        )
+        start = event.start_time
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=day_start.tzinfo)
         if day_start <= start < end:
             itinerary.append(
                 _ItineraryItem(
@@ -126,9 +124,9 @@ def review_day(
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set.")
 
-    plan = parse_plan(description)
     now = datetime.now(timezone.utc)
     day_start = day_bounds(now=now)[0]
+    plan = parse_plan(description, plan_day=day_start.date())
     plan_day = day_start.date().isoformat()
     calendar_context, conditions = _collect_context(
         plan,

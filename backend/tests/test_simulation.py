@@ -22,8 +22,9 @@ def test_tasks_pause_at_seven_and_resume_on_following_day(
     monkeypatch.setattr(simulation.np.random, "rand", lambda: 1.0)
     base_date = datetime(2026, 10, 24, 8)
     task = Task(
+        id="write-up",
         title="Write-up",
-        estimated_total_mins=estimated_minutes,
+        estimated_length=estimated_minutes,
         completion_pct=0,
         deadline=deadline,
         priority=0,
@@ -43,11 +44,12 @@ def test_tasks_pause_at_seven_and_resume_on_following_day(
 def test_simulation_requires_matching_datetime_timezone_awareness() -> None:
     base_date = datetime(2026, 10, 24, 8)
     task = Task(
+        id="write-up",
         title="Write-up",
-        estimated_total_mins=60,
+        estimated_length=60,
         completion_pct=0,
         deadline=datetime(2026, 10, 24, 17, tzinfo=timezone.utc),
-        priority="high",
+        priority=0,
     )
 
     with pytest.raises(ValueError, match="timezone-aware or naive"):

@@ -9,7 +9,7 @@ from app.agents.chaos import AgentContext, ChaosReport, Prediction, TaskSchedule
 from app.agents.schemas import Plan
 from app.integrations import simulation
 from app.models import Event, EventKind, Task
-from app.timeutil import LOCAL_TIMEZONE, at_minute
+from app.timeutil import LOCAL_TIMEZONE
 
 
 @dataclass(frozen=True)
@@ -113,13 +113,13 @@ def _simulation_inputs(
                 id=task.id,
                 title=simulation_title,
                 estimated_length=task.estimated_length,
-                completion_pct=0.0,
+                completion_pct=task.completion_pct,
                 deadline=(
-                    at_minute(day_start, task.deadline).replace(tzinfo=None)
+                    _local_naive(task.deadline)
                     if task.deadline is not None
                     else day_end
                 ),
-                priority=min(task_order.get(task.id, rank + 100), 2),
+                priority=min(task_order.get(task.id, task.priority), 2),
                 can_be_divided=task.can_be_divided,
             )
         )
