@@ -4,7 +4,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.integrations import calendar as calendar_integration
-from app.integrations.calendar import _to_busy_event, get_busy_events
+from app.integrations.calendar import (
+    BACKEND_DIR,
+    _configured_path,
+    _to_busy_event,
+    get_busy_events,
+)
 
 
 def test_to_busy_event_parses_timed_and_all_day_events() -> None:
@@ -62,6 +67,16 @@ def test_get_busy_events_requires_aware_ordered_range() -> None:
             datetime(2026, 10, 25, tzinfo=ZoneInfo("UTC")),
             datetime(2026, 10, 24, tzinfo=ZoneInfo("UTC")),
         )
+
+
+def test_configured_relative_paths_resolve_from_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_CALENDAR_CREDENTIALS_FILE", "private/oauth.json")
+
+    assert _configured_path(
+        "GOOGLE_CALENDAR_CREDENTIALS_FILE", "default.json"
+    ) == BACKEND_DIR / "private/oauth.json"
 
 
 def test_get_busy_events_reads_all_pages(monkeypatch: pytest.MonkeyPatch) -> None:

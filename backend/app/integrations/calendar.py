@@ -13,6 +13,11 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
+from dotenv import load_dotenv
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+load_dotenv(ENV_FILE)
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events.readonly",
@@ -34,12 +39,10 @@ class CalendarBusyEvent:
 
 
 def _credentials() -> Credentials:
-    credentials_path = Path(
-        os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_FILE", DEFAULT_CREDENTIALS_FILE)
+    credentials_path = _configured_path(
+        "GOOGLE_CALENDAR_CREDENTIALS_FILE", DEFAULT_CREDENTIALS_FILE
     )
-    token_path = Path(
-        os.environ.get("GOOGLE_CALENDAR_TOKEN_FILE", DEFAULT_TOKEN_FILE)
-    )
+    token_path = _configured_path("GOOGLE_CALENDAR_TOKEN_FILE", DEFAULT_TOKEN_FILE)
 
     credentials: Credentials | None = None
     if token_path.exists():
@@ -64,6 +67,13 @@ def _credentials() -> Credentials:
     token_path.write_text(credentials.to_json(), encoding="utf-8")
     token_path.chmod(0o600)
     return credentials
+
+
+def _configured_path(variable: str, default: str) -> Path:
+    path = Path(os.environ.get(variable, default)).expanduser()
+    if not path.is_absolute():
+        path = BACKEND_DIR / path
+    return path
 
 
 def _service() -> Resource:
