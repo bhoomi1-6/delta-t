@@ -1,0 +1,1 @@
+"""Vectorised schedule simulation."""
