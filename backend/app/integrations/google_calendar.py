@@ -17,6 +17,7 @@ from googleapiclient.discovery import Resource, build
 from dotenv import load_dotenv
 
 from app.models import Event, TriangularDist
+from app.timeutil import day_bounds, minutes_since_midnight
 
 
 # ============================================================
@@ -35,8 +36,6 @@ SCOPES = [
 
 DEFAULT_CREDENTIALS_FILE = "google-calendar-credentials.json"
 DEFAULT_TOKEN_FILE = "google-calendar-token.json"
-
-SIMULATION_HOURS = 24
 
 
 # ============================================================
@@ -305,16 +304,18 @@ def _to_simulation_event(
     event: CalendarBusyEvent,
     simulation_start: datetime,
     simulation_end: datetime,
+    day_start: datetime,
 ) -> Event | None:
     """Convert a calendar event into a simulation Event.
 
     Calendar events are treated as fixed commitments.
 
-    Start times are integer minutes relative to the
-    simulation start.
+    Start times are integer minutes since local midnight
+    (day_start), so they are directly comparable with the
+    plan's times and the simulation engine.
 
-    Events overlapping the simulation boundaries are
-    clipped to the 24-hour simulation window.
+    Events overlapping the simulation window are clipped
+    to it.
     """
 
     # Convert all times to UTC for consistent arithmetic.
@@ -341,11 +342,10 @@ def _to_simulation_event(
         effective_end - effective_start
     ).total_seconds() / 60
 
-    # Minutes from the beginning of the simulation.
-    start_offset = int(
-        (
-            effective_start - simulation_start
-        ).total_seconds() // 60
+    # Minutes since local midnight.
+    start_offset = minutes_since_midnight(
+        effective_start,
+        day_start,
     )
 
     return Event(
@@ -363,30 +363,31 @@ def _to_simulation_event(
 
 
 # ============================================================
-# Rolling 24-Hour Simulation
+# Midnight-to-Midnight Simulation Day
 # ============================================================
 
-def get_next_24_hours(
+def get_day(
+    day: date | None = None,
     calendar_id: str | None = None,
 ) -> tuple[datetime, datetime, list[Event]]:
-    """Get simulation events for the next 24 hours from now.
+    """Get simulation events for one local day, midnight to midnight.
 
-    Event start_time values are minutes from simulation_start.
+    Event start_time values are minutes since local midnight
+    (0-1439), independent of when the app was started.
+
+    Args:
+        day: Day to load. Defaults to tomorrow in LOCAL_TIMEZONE,
+            so running at 15:00 on the 24th loads the 25th.
+        calendar_id: Calendar to read. Defaults to GOOGLE_CALENDAR_ID.
 
     Returns:
-        simulation_start: Current UTC datetime.
-        simulation_end: Exactly 24 hours after start.
+        simulation_start: Midnight at the start of the day, tz-aware.
+        simulation_end: The next local midnight.
         events: Calendar events converted into Event objects.
     """
 
-    # Always use the current time.
-    simulation_start = datetime.now(timezone.utc)
-
-    # Exactly 24 hours later.
-    simulation_end = (
-        simulation_start
-        + timedelta(hours=SIMULATION_HOURS)
-    )
+    day_start, simulation_end = day_bounds(day)
+    simulation_start = day_start
 
     # Fetch Google Calendar events.
     busy_events = get_busy_events(
@@ -402,6 +403,7 @@ def get_next_24_hours(
             event=busy_event,
             simulation_start=simulation_start,
             simulation_end=simulation_end,
+            day_start=day_start,
         )
 
         if simulation_event is not None:
@@ -432,7 +434,7 @@ def get_next_24_hours(
 if __name__ == "__main__":
 
     simulation_start, simulation_end, events = (
-        get_next_24_hours()
+        get_day()
     )
 
     print(
