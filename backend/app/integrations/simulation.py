@@ -1,42 +1,127 @@
+from datetime import date, datetime, time, timedelta
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import Any
 from collections import Counter
+
+WORKDAY_START = time(hour=8)
+WORKDAY_CUTOFF = time(hour=19)
+SIMULATION_HORIZON = timedelta(days=7)
 
 # Data Structures
 
 @dataclass
 class CalendarEvent:
     title: str
-    start_min: int  # minutes from midnight (e.g., 09:00 AM = 540)
-    end_min: int
+    start: datetime
+    end: datetime
     location: str
     is_flexible: bool = False
+
 
 @dataclass
 class Task:
     title: str
     estimated_total_mins: float
     completion_pct: float
-    deadline_min: int  # hard deadline in minutes from midnight
-    priority: str      # priority high,medium,low
+    deadline: datetime
+    priority: int # 0 = high, 1 = medium, 2 = low
+
+
+@dataclass
+class _ActiveTask:
+    title: str
+    remaining_mins: float
+    deadline: datetime
+    priority: int
+
+
+def _work_on_tasks(
+    active_tasks: list[_ActiveTask],
+    current_time: datetime,
+    work_until: datetime,
+    failed_tasks: set[str],
+) -> datetime:
+    for task in active_tasks:
+        if task.remaining_mins <= 0:
+            continue
+        if task.deadline <= current_time:
+            failed_tasks.add(task.title)
+            continue
+
+        task_work_until = min(work_until, task.deadline)
+        available_mins = (task_work_until - current_time).total_seconds() / 60
+        if available_mins <= 0:
+            continue
+
+        time_allocated = min(available_mins, task.remaining_mins)
+        distraction_penalty = (
+            np.random.uniform(10, 30) if np.random.rand() < 0.3 else 0.0
+        )
+        progress_made = max(0.0, time_allocated - distraction_penalty)
+        task.remaining_mins = max(0.0, task.remaining_mins - progress_made)
+        current_time += timedelta(minutes=time_allocated)
+
+        if task.remaining_mins > 0 and current_time >= task.deadline:
+            failed_tasks.add(task.title)
+
+    return current_time
 
 # --- 2. THE SIMULATION ENGINE ---
 
 def simulate(
-    events: List[CalendarEvent], 
-    tasks: List[Task], 
+    simulation_base_date: datetime,
+    events: list[CalendarEvent],
+    tasks: list[Task],
     transit_shock_active: bool,
     num_simulations: int = 1000,
-    route_cache: Dict[str, Dict[str, float]] = None
-) -> Dict[str, Any]:
+    route_cache: dict[str, dict[str, float]] | None = None,
+    weather_cache: dict[str, float] | None = None,
+) -> dict[str, Any]:
     
     meeting_failures = Counter()
     task_failures = Counter()
-    
-    # Sort events chronologically to ensure proper gap calculation
-    sorted_events = sorted(events, key=lambda e: e.start_min)
-    
+    task_unfinished = Counter()
+
+    if not isinstance(simulation_base_date, datetime):
+        raise TypeError("simulation_base_date must be a datetime")
+
+    all_datetimes = [simulation_base_date]
+    for event in events:
+        if event.end <= event.start:
+            raise ValueError(f"Event {event.title!r} must end after it starts")
+        all_datetimes.extend((event.start, event.end))
+    all_datetimes.extend(task.deadline for task in tasks)
+
+    base_is_aware = simulation_base_date.utcoffset() is not None
+    if any((value.utcoffset() is not None) != base_is_aware for value in all_datetimes):
+        raise ValueError("All simulation datetimes must consistently be timezone-aware or naive")
+    if any(value.tzinfo != simulation_base_date.tzinfo for value in all_datetimes):
+        raise ValueError("All simulation datetimes must use the same timezone")
+    if any(event.start.date() < simulation_base_date.date() for event in events):
+        raise ValueError("Events cannot start before simulation_base_date")
+
+    route_cache = route_cache or {}
+    weather_cache = weather_cache or {}
+    events_by_date: dict[date, list[CalendarEvent]] = {}
+    for event in events:
+        events_by_date.setdefault(event.start.date(), []).append(event)
+    for daily_events in events_by_date.values():
+        daily_events.sort(key=lambda event: event.start)
+
+    latest_task_deadline = max(
+        (task.deadline for task in tasks),
+        default=max(
+            (event.end for event in events),
+            default=simulation_base_date,
+        ),
+    )
+    simulation_end = min(
+        max(simulation_base_date, latest_task_deadline),
+        simulation_base_date + SIMULATION_HORIZON,
+    )
+    last_simulation_date = simulation_end.date()
+
     # Pre-calculate transit delay samples
     if transit_shock_active:
         transit_delay_samples = np.random.exponential(scale=15.0, size=num_simulations) + 10.0
@@ -44,110 +129,140 @@ def simulate(
         transit_delay_samples = np.random.uniform(0, 5, size=num_simulations)
 
     for run in range(num_simulations):
-        current_time = 480  # Day starts at 08:00 AM (480 mins)
-        
-        # Track remaining work for each task in this specific universe (deep copy tracking)
-        active_tasks = []
+        failed_tasks: set[str] = set()
+        active_tasks: list[_ActiveTask] = []
         for t in tasks:
             rem_work = t.estimated_total_mins * (1.0 - (t.completion_pct / 100.0))
-            active_tasks.append({
-                "title": t.title,
-                "remaining_mins": rem_work,
-                "deadline": t.deadline_min,
-                "priority": t.priority
-            })
-        
-        # Sort tasks by priority (high priority gets first pick of available gaps)
-        priority_map = {"high": 0, "medium": 1, "low": 2}
-        active_tasks.sort(key=lambda t: priority_map[t["priority"]])
-
-        currentLocation = "St. Catherine's College"  # Starting point for the day
-
-        # --- ITERATE THROUGH THE DAY'S CALENDAR EVENTS & GAPS ---
-        for event in sorted_events:
-            # 1. Evaluate Transit to the Event
-
-            route_data = dict(route_cache.get(
-                f"{currentLocation}_to_{event.location}", 
-                {"walking": 15.0, "transit": 10.0}
-            ))
-
-            if "transit" in route_data:
-                route_data["transit"] += transit_delay_samples[run]
-
-
-            # Baseline travel duration (e.g., choosing transit baseline)
-            
-            optimal_transport = min(route_data, key=route_data.get)  # Choose the fastest mode
-            total_commute_time = route_data[optimal_transport]
-
-            # 2. Calculate true workable gap BEFORE the user must depart for the event
-            latest_departure_time = event.start_min - total_commute_time  # Target departure under ideal conditions
-            workable_gap = latest_departure_time - current_time
-
-
-            if workable_gap > 15:  # If there is a meaningful window to work before leaving
-                for task in active_tasks:
-                    if task["remaining_mins"] <= 0:
-                        continue
-                    
-                    # Stochastic distractions during work block
-                    distraction_penalty = np.random.uniform(10, 30) if np.random.rand() < 0.3 else 0.0
-                    time_allocated = min(workable_gap, task["remaining_mins"])
-                    
-                    progress_made = max(0.0, time_allocated - distraction_penalty)
-                    task["remaining_mins"] -= progress_made
-                    workable_gap -= time_allocated
-                    
-                    if workable_gap <= 0:
-                        break
-
-            # 3. Depart and evaluate arrival at the meeting
-            # Current time advances to departure time (or stays current if running late)
-            departure_time = max(current_time, latest_departure_time)
-            actual_arrival = departure_time + total_commute_time
-
-            # Check for late arrival
-            if actual_arrival > event.start_min + 5:  # 5 min grace period
-                meeting_failures[event.title] += 1
-
-            # Advance current time to the conclusion of the event
-            current_time = max(actual_arrival, event.start_min) + (event.end_min - event.start_min)
-            currentLocation = event.location  # Update location
-
-        # --- 3. END-OF-DAY LEFTOVER TASK SWEEP ---
-        # Any remaining tasks are tackled in the evening block after the final event
-        for task in active_tasks:
-            if task["remaining_mins"] > 0:
-                # Stochastic completion for remaining work
-                final_push = np.random.triangular(
-                    task["remaining_mins"] * 0.9, 
-                    task["remaining_mins"], 
-                    task["remaining_mins"] * 1.5 if isinstance(task["remaining_mins"], float) else task["remaining_mins"] * 1.3
+            active_tasks.append(
+                _ActiveTask(
+                    title=t.title,
+                    remaining_mins=rem_work,
+                    deadline=t.deadline,
+                    priority=t.priority,
                 )
-                current_time += final_push
-                
-                # Check if it missed the hard deadline
-                if current_time > task["deadline"]:
-                    task_failures[task["title"]] += 1
+            )
+
+        active_tasks.sort(key=lambda task: task.priority)
+
+        current_location = "St. Catherine's College"
+        current_date = simulation_base_date.date()
+        current_time = simulation_base_date
+        while current_date <= last_simulation_date:
+            day_start = datetime.combine(
+                current_date, WORKDAY_START, tzinfo=simulation_base_date.tzinfo
+            )
+            day_cutoff = min(
+                datetime.combine(
+                    current_date,
+                    WORKDAY_CUTOFF,
+                    tzinfo=simulation_base_date.tzinfo,
+                ),
+                simulation_end,
+            )
+            current_time = max(day_start, simulation_base_date)
+
+            for event in events_by_date.get(current_date, []):
+                if event.start >= simulation_end:
+                    continue
+
+                route_data = dict(
+                    route_cache.get(
+                        f"{current_location}_to_{event.location}",
+                        {"walking": 15.0, "transit": 10.0, "cycling": 12.0},
+                    )
+                )
+                if "transit" in route_data:
+                    route_data["transit"] += transit_delay_samples[run]
+
+                is_raining = np.random.rand() < weather_cache.get(event.title, 0.0)
+                if is_raining:
+                    route_data["walking"] *= 1.1
+                    route_data["cycling"] *= 1.5
+
+                total_commute_time = route_data[min(route_data, key=route_data.get)]
+                latest_departure_time = event.start - timedelta(
+                    minutes=total_commute_time
+                )
+                work_until = min(latest_departure_time, day_cutoff)
+                if (work_until - current_time).total_seconds() > 10 * 60:
+                    current_time = _work_on_tasks(
+                        active_tasks, current_time, work_until, failed_tasks
+                    )
+
+                departure_time = max(current_time, latest_departure_time)
+                actual_arrival = departure_time + timedelta(
+                    minutes=total_commute_time
+                )
+                if actual_arrival > event.start + timedelta(minutes=5):
+                    meeting_failures[event.title] += 1
+
+                current_time = max(
+                    current_time,
+                    max(actual_arrival, event.start) + (event.end - event.start),
+                )
+                current_location = event.location
+
+            if current_time < day_cutoff:
+                current_time = _work_on_tasks(
+                    active_tasks, current_time, day_cutoff, failed_tasks
+                )
+
+            current_date += timedelta(days=1)
+
+        for task in active_tasks:
+            if task.remaining_mins <= 0:
+                continue
+            if task.deadline <= simulation_end:
+                failed_tasks.add(task.title)
+            else:
+                task_unfinished[task.title] += 1
+
+        for task_title in failed_tasks:
+            task_failures[task_title] += 1
 
     # --- 4. COMPILE PROBABILISTIC INSIGHTS ---
     return {
         "transit_shock_flagged": transit_shock_active,
         "meeting_failure_probabilities": {title: (count / num_simulations) * 100 for title, count in meeting_failures.items()},
-        "task_failure_probabilities": {title: (count / num_simulations) * 100 for title, count in task_failures.items()}
+        "task_failure_probabilities": {title: (count / num_simulations) * 100 for title, count in task_failures.items()},
+        "task_unfinished_probabilities": {
+            title: (count / num_simulations) * 100
+            for title, count in task_unfinished.items()
+        },
     }
 
 # --- TEST EXECUTION ---
 if __name__ == "__main__":
+    simulation_base_date = datetime(2026, 10, 24, 8)
     mock_events = [
-        CalendarEvent(title="Morning Lecture", start_min=540, end_min=600, location="Lecture Hall"),       # 09:00 - 10:00
-        CalendarEvent(title="Afternoon Supervision", start_min=720, end_min=780, location="College")       # 12:00 - 13:00 (2h gap prior!)
+        CalendarEvent(
+            title="Morning Lecture",
+            start=simulation_base_date.replace(hour=9),
+            end=simulation_base_date.replace(hour=10),
+            location="Lecture Hall",
+        ),
+        CalendarEvent(
+            title="Afternoon Supervision",
+            start=simulation_base_date.replace(hour=12),
+            end=simulation_base_date.replace(hour=13),
+            location="College",
+        ),
     ]
-    
     mock_tasks = [
-        Task(title="Problem Sheet 3", estimated_total_mins=90, completion_pct=10.0, deadline_min=900, priority="high") # 3:00 PM deadline
+        Task(
+            title="Problem Sheet 3",
+            estimated_total_mins=90,
+            completion_pct=10.0,
+            deadline=simulation_base_date.replace(hour=15),
+            priority=0,
+        )
     ]
 
-    results = simulate(mock_events, mock_tasks, transit_shock_active=True, num_simulations=1000)
+    results = simulate(
+        simulation_base_date,
+        mock_events,
+        mock_tasks,
+        transit_shock_active=True,
+        num_simulations=1000,
+    )
     print("=== DELTA-T SIMULATION RESULTS ===", results)

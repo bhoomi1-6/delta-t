@@ -1,36 +1,41 @@
 import requests
 from datetime import datetime
 
-def get_oxford_weather(target_datetime: datetime) -> dict:
+def get_oxford_weather_forecast(target_datetime: datetime) -> dict:
     """
-    Fetches hourly weather forecast for Oxford from Open-Meteo.
-    Returns precipitation and temperature for the specific hour.
+    Fetches hourly weather and precipitation probability for Oxford 
+    for future dates using Open-Meteo (no API key required).
     """
-    # Oxford coordinates
     lat = 51.7522
     lon = -1.2560
     
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation,weathercode"
+    # Request hourly precipitation, rain amounts, and precipitation probability
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={lat}&longitude={lon}&"
+        f"hourly=precipitation_probability,precipitation,rain"
+    )
     
     try:
         response = requests.get(url)
         data = response.json()
         
         if "hourly" in data:
-            times = data["hourly"]["time"]  # List of ISO strings
-            precipitation_list = data["hourly"]["precipitation"]
+            times = data["hourly"]["time"]
+            prob_list = data["hourly"]["precipitation_probability"]
+            precip_list = data["hourly"]["precipitation"]
             
-            # Format target datetime to match Open-Meteo's hourly format (e.g., "2026-10-25T14:00")
+            # Format target datetime to match Open-Meteo's hourly format ("YYYY-MM-DDTHH:00")
             target_str = target_datetime.strftime("%Y-%m-%dT%H:00")
             
             if target_str in times:
                 idx = times.index(target_str)
                 return {
-                    "precipitation": precipitation_list[idx],  # in mm
-                    "raining": precipitation_list[idx] > 0.0
+                    "precipitation_probability": prob_list[idx],  # e.g., 70.0 (%)
+                    "precipitation_mm": precip_list[idx]          # e.g., 1.2 (mm)
                 }
     except Exception as e:
         print(f"Weather API fetch failed: {e}")
         
-    # Safe fallback if offline
-    return {"precipitation": 0.0, "raining": False}
+    # Default fallback if offline or out of bounds
+    return {"precipitation_probability": 0.0, "precipitation_mm": 0.0}

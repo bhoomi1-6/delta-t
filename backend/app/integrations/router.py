@@ -1,16 +1,18 @@
 import os
 import requests
 from typing import Dict
-from datetime import datetime
+from datetime import datetime, timezone
+
+DEFAULT_ROUTE_DURATIONS = {"walking": 15.0, "transit": 10.0, "cycling": 12.0}
+
 
 def get_route_durations_by_arrival(origin: str, destination: str, target_arrival_time: datetime = None) -> Dict[str, float]:
     """
-    Queries Google's modern Routes API (v2) specifying an 'arrivalTime' 
-    so transit options are optimized to get the user there on time.
+    Queries Google's Routes API (v2) for walking, transit, and cycling options.
     """
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
-        return {"walking": 15.0, "transit": 10.0}
+        return DEFAULT_ROUTE_DURATIONS.copy()
 
     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
     
@@ -21,9 +23,16 @@ def get_route_durations_by_arrival(origin: str, destination: str, target_arrival
     }
 
     routes = {}
-    modes = {"walking": "WALK", "transit": "TRANSIT"}
+    modes = {"walking": "WALK", "transit": "TRANSIT", "cycling": "BICYCLE"}
 
-    arrival_str = target_arrival_time.isoformat() + "Z" if target_arrival_time else None
+    arrival_str = None
+    if target_arrival_time:
+        if target_arrival_time.utcoffset() is None:
+            arrival_str = target_arrival_time.replace(tzinfo=timezone.utc).isoformat()
+        else:
+            arrival_str = target_arrival_time.isoformat()
+        if arrival_str.endswith("+00:00"):
+            arrival_str = arrival_str[:-6] + "Z"
 
     for mode_name, google_mode in modes.items():
         payload = {
@@ -44,9 +53,9 @@ def get_route_durations_by_arrival(origin: str, destination: str, target_arrival
                 duration_str = data["routes"][0].get("duration", "900s")
                 routes[mode_name] = float(duration_str.rstrip("s")) / 60.0
             else:
-                routes[mode_name] = 15.0 if mode_name == "walking" else 10.0
+                routes[mode_name] = DEFAULT_ROUTE_DURATIONS[mode_name]
                 
         except Exception as e:
-            routes[mode_name] = 15.0 if mode_name == "walking" else 10.0
+            routes[mode_name] = DEFAULT_ROUTE_DURATIONS[mode_name]
 
     return routes
