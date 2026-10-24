@@ -1,15 +1,14 @@
 import type { Metadata } from "next";
+import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "delta-t",
-  description: "Schedule risk simulation and repair",
+  title: "Flowboard | Your workspace",
+  description: "A focused dashboard for tasks, information and AI suggestions.",
 };
 
 export default function RootLayout({
   children,
-}: {
-  children: React.ReactNode;
-}) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
       <body>{children}</body>
