@@ -16,8 +16,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 from dotenv import load_dotenv
 
-from app.models import Event, TriangularDist
-from app.timeutil import day_bounds, minutes_since_midnight
+from app.models import Event
+from app.timeutil import LOCAL_TIMEZONE, day_bounds
 
 
 # ============================================================
@@ -304,15 +304,12 @@ def _to_simulation_event(
     event: CalendarBusyEvent,
     simulation_start: datetime,
     simulation_end: datetime,
-    day_start: datetime,
 ) -> Event | None:
     """Convert a calendar event into a simulation Event.
 
     Calendar events are treated as fixed commitments.
 
-    Start times are integer minutes since local midnight
-    (day_start), so they are directly comparable with the
-    plan's times and the simulation engine.
+    Event timestamps are converted to the local simulation timezone.
 
     Events overlapping the simulation window are clipped
     to it.
@@ -337,27 +334,13 @@ def _to_simulation_event(
     if effective_start >= effective_end:
         return None
 
-    # Duration in minutes.
-    duration_minutes = (
-        effective_end - effective_start
-    ).total_seconds() / 60
-
-    # Minutes since local midnight.
-    start_offset = minutes_since_midnight(
-        effective_start,
-        day_start,
-    )
-
     return Event(
         id=event.event_id,
         title=event.summary,
         kind="fixed",
-        duration=TriangularDist(
-            min=duration_minutes,
-            mode=duration_minutes,
-            max=duration_minutes,
-        ),
-        start_time=start_offset,
+        std=0,
+        start_time=effective_start.astimezone(LOCAL_TIMEZONE),
+        end_time=effective_end.astimezone(LOCAL_TIMEZONE),
         location=event.location,
     )
 
@@ -372,8 +355,7 @@ def get_day(
 ) -> tuple[datetime, datetime, list[Event]]:
     """Get simulation events for one local day, midnight to midnight.
 
-    Event start_time values are minutes since local midnight
-    (0-1439), independent of when the app was started.
+    Event start_time and end_time values are local, timezone-aware datetimes.
 
     Args:
         day: Day to load. Defaults to tomorrow in LOCAL_TIMEZONE,
@@ -403,7 +385,6 @@ def get_day(
             event=busy_event,
             simulation_start=simulation_start,
             simulation_end=simulation_end,
-            day_start=day_start,
         )
 
         if simulation_event is not None:
@@ -412,13 +393,7 @@ def get_day(
             )
 
     # Sort events chronologically.
-    simulation_events.sort(
-        key=lambda event: (
-            event.start_time
-            if event.start_time is not None
-            else float("inf")
-        )
-    )
+    simulation_events.sort(key=lambda event: event.start_time)
 
     return (
         simulation_start,

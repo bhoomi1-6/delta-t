@@ -1,9 +1,9 @@
-import weather
-import router
-import simulation
-from simulation import CalendarEvent, Task
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
+from app.integrations import router, simulation, weather
+from app.models import Event, Task
+
 
 def main():
     print("Initializing Delta-t Stochastic Simulation Engine...")
@@ -13,22 +13,31 @@ def main():
 
     # 1. Define dummy calendar events (sorted or unsorted—the engine handles chronological order)
     mock_events = [
-        CalendarEvent(
+        Event(
+            id="lecture",
             title="Linear Algebra Lecture", 
-            start=simulation_base_date.replace(hour=9),
-            end=simulation_base_date.replace(hour=10),
+            kind="fixed",
+            start_time=simulation_base_date.replace(hour=9),
+            end_time=simulation_base_date.replace(hour=10),
+            std=5,
             location="Mathematical Institute"
         ),
-        CalendarEvent(
+        Event(
+            id="tutorial",
             title="College Tutorial / Supervision", 
-            start=simulation_base_date.replace(hour=12),
-            end=simulation_base_date.replace(hour=13),
+            kind="fixed",
+            start_time=simulation_base_date.replace(hour=12),
+            end_time=simulation_base_date.replace(hour=13),
+            std=5,
             location="St. Catherine's College"
         ),
-        CalendarEvent(
+        Event(
+            id="lab-practical",
             title="Lab Practical", 
-            start=simulation_base_date.replace(hour=14),
-            end=simulation_base_date.replace(hour=17),
+            kind="fixed",
+            start_time=simulation_base_date.replace(hour=14),
+            end_time=simulation_base_date.replace(hour=17),
+            std=10,
             location="Department of Computer Science"
         )
     ]
@@ -42,43 +51,46 @@ def main():
     # Assuming user starts from "Home" for the first event, then moves between event locations
     currentLocation = "St. Catherine's College"  # Starting point for the first event
     for event in mock_events:
-        route_key = f"{currentLocation}_to_{event.location}"
-
-        event_start_datetime = event.start
-    
-        
-        print(f"Fetching route: {route_key}...")
-        route_cache[route_key] = router.get_route_durations_by_arrival(
-            origin=currentLocation, 
-            destination=event.location, 
-            target_arrival_time=event_start_datetime
-        )
-        print(f"Route durations: {route_cache[route_key]}")
-
+        event_start_datetime = event.start_time
         weather_data = weather.get_oxford_weather_forecast(event_start_datetime)
         weather_cache[event.title] = weather_data["precipitation_probability"] / 100.0  # e.g., 0.70
 
-        currentLocation = event.location  # Next event originates from the current event's location
+        if event.location is None:
+            raise ValueError(f"Demo event {event.id!r} needs a location")
+
+        route_key = f"{currentLocation}_to_{event.location}"
+        print(f"Fetching route: {route_key}...")
+        route_cache[route_key] = router.get_route_durations_by_arrival(
+            origin=currentLocation,
+            destination=event.location,
+            target_arrival_time=event_start_datetime,
+        )
+        print(f"Route durations: {route_cache[route_key]}")
+
+        currentLocation = event.location
 
     # 2. Define dummy tasks with completion states, priorities, and hard deadlines
     mock_tasks = [
         Task(
+            id="maths-problem-sheet",
             title="Problem Sheet 4 (Maths)",
-            estimated_total_mins=420,
+            estimated_length=420,
             completion_pct=15.0,
             deadline=(simulation_base_date + timedelta(days=1)).replace(hour=16),
             priority=0,
         ),
         Task(
+            id="cs-practical-writeup",
             title="CS Practical Writeup",
-            estimated_total_mins=600,
+            estimated_length=600,
             completion_pct=50.0,
             deadline=(simulation_base_date + timedelta(days=2)).replace(hour=17),
             priority=1,
         ),
         Task(
+            id="long-term-research",
             title="Long-term Research Project",
-            estimated_total_mins=4800,
+            estimated_length=4800,
             completion_pct=0.0,
             deadline=(simulation_base_date + timedelta(days=30)).replace(hour=17),
             priority=2,
