@@ -241,6 +241,9 @@ def test_repair_retries_proposal_with_mismatched_event_ids(
     assert "Preferred transport: transit" in prompts[0]
     assert "Workday: 07:00 to 21:00 local time" in prompts[0]
     assert "per-run causal attribution" in prompts[0]
+    assert "task reordering can fix" in prompts[0]
+    assert "not an interactive clarification flow" in prompts[0]
+    assert "not address the user with a direct question" in prompts[0]
     assert "previous proposal was rejected" in prompts[1]
     assert result.proposed_plan.events[0].id == "meeting-1"
 
@@ -320,5 +323,9 @@ def test_judge_prompt_uses_event_names_not_internal_ids(monkeypatch) -> None:
 
     assert "Meet Alex" in prompts[0]
     assert "Limited work window before deadline." in prompts[0]
-    assert "does not identify its cause" in prompts[0]
+    assert "provides no cause, say so once" in prompts[0]
+    assert "change in percentage points" in prompts[0]
+    assert "do not repeat their issues" in prompts[0]
+    assert "do not ask" in prompts[0]
+    assert "direct question" in prompts[0]
     assert "secret-event-id" not in prompts[0]

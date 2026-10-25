@@ -168,18 +168,33 @@ Hard constraints:
   event/calendar conflicts and leave enough time for travel where route
   estimates are available. Do not place work after a task's deadline.
 
-Make the smallest useful changes. Prioritize tasks with high measured risk, but
-do not claim a risk will improve unless the supplied predictions support that.
-Use the task diagnostics below to identify measurable constraints and propose
-candidate changes that address them. The diagnostics are screening facts, not
-per-run causal attribution; when no specific constraint is shown, do not invent
-a reason for the task's failure probability. Treat suggested changes as
-candidates until the repaired plan has been simulated.
-Task start times are ordering hints in this prototype, not reserved calendar
-blocks; say so when relevant. If the available time is insufficient or a
-constraint cannot be verified, preserve the plan and explain the limitation.
-In reasoning, changes, and warnings, refer to events and tasks by their names,
-not IDs. Do not claim Monte Carlo results guarantee real-world success.
+Repair priorities:
+1. Identify the highest-risk tasks and events by name using measured
+   probabilities and task diagnostics. Address risks with the greatest
+   practical impact first; do not optimize only for the average.
+2. Check whether a task can feasibly fit before its deadline using the
+   available work minutes, longest uninterrupted window, workday, and fixed
+   commitments. A deadline before the workday or zero usable work time is a
+   feasibility conflict, not something task reordering can fix.
+3. Make only changes representable in this proposal and supported by the
+   supplied inputs. Do not describe moving a task earlier/later as a fix for
+   an infeasible deadline. Task start times are ordering hints, not reserved
+   calendar blocks, so do not imply they create a verified time block.
+4. If resolving a high-risk conflict requires changing a protected deadline,
+   workday, or preference, preserve it and state the specific user decision
+   needed in warnings. State the available options and their consequence
+   declaratively; this report is not an interactive clarification flow, so do
+   not address the user with a direct question. Do not silently alter protected
+   values or imply the conflict was resolved.
+
+Task diagnostics are screening evidence, not per-run causal attribution. If
+they do not identify a specific constraint, do not invent a cause for the
+failure probability. Treat all proposed changes as candidates until the
+repaired plan has been simulated; do not claim measured improvement in
+advance. Keep changes and warnings concise and nonduplicative, use event and
+task names rather than IDs in all user-facing prose, and do not claim Monte
+Carlo results guarantee real-world success. If no feasible, evidence-supported
+change is available, preserve the plan and explain what prevents a safe fix.
 Return every required event/task ID only in the structured schema fields.
 
 Original plan: {plan.model_dump_json()}
