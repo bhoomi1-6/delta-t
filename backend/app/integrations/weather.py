@@ -60,6 +60,8 @@ def _fetch_daily_forecast(day: date) -> dict[str, dict[str, float]]:
         }
         for index, timestamp in enumerate(times)
     }
+    for item in forecast.values():
+        item["forecast_available"] = 1.0
     with _WEATHER_CACHE_LOCK:
         _WEATHER_CACHE[day] = (monotonic() + WEATHER_CACHE_TTL_SECONDS, forecast)
     return forecast
@@ -104,6 +106,7 @@ def get_oxford_weather_forecasts(
                 "precipitation_mm": 0.0,
                 "rain_mm": 0.0,
                 "wind_speed_kmh": 0.0,
+                "forecast_available": 0.0,
             }
         results.append(result)
     return results

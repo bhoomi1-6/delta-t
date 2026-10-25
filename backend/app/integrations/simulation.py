@@ -255,7 +255,7 @@ def simulate(
                 actual_arrival = departure_time + timedelta(
                     minutes=total_commute_time
                 )
-                if actual_arrival > event_start + timedelta(minutes=5):
+                if actual_arrival > event_start:
                     meeting_failures[event.title] += 1
 
                 nominal_duration_mins = (

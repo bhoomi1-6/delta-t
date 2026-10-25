@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from app.agents import predictor
 from app.agents import repair
 from app.agents.chaos import AgentContext, TaskScheduleItem
@@ -8,6 +10,32 @@ from app.agents.judge import _average_failure_risk
 from app.agents.repair import RepairProposal
 from app.agents.schemas import Plan, PlanTask
 from app.models import Event, EventKind
+
+
+def test_repair_validation_rejects_changed_task_effort() -> None:
+    original_task = PlanTask(
+        id="report",
+        title="Write report",
+        estimated_length=120,
+        completion_pct=0,
+        deadline=datetime(2026, 10, 26, 23, 59),
+    )
+    plan = Plan(events=[], tasks=[original_task])
+    proposal = RepairProposal(
+        proposed_plan=Plan(
+            events=[],
+            tasks=[original_task.model_copy(update={"estimated_length": 30})],
+        ),
+        proposed_task_schedule=[
+            TaskScheduleItem(task_id="report", start_time=480, reasoning="Start first")
+        ],
+        reasoning="Prioritize the deadline.",
+        changes=[],
+        warnings=[],
+    )
+
+    with pytest.raises(ValueError, match="preserve all task details"):
+        repair._validate_proposal(plan, proposal)
 
 
 def test_predictor_runs_without_chaos_agent(monkeypatch) -> None:
@@ -415,7 +443,9 @@ def test_judge_prompt_uses_event_names_not_internal_ids(monkeypatch) -> None:
     assert "Meet Alex" in prompt
     assert "Limited work window before deadline." in prompt
     assert "provides no cause, say so once" in prompt
-    assert "change in percentage points" in prompt
+    assert "repaired probability only" in prompt
+    assert "before-and-after comparisons" in prompt
+    assert "Do not repeat it or compare overall outcomes" in prompt
     assert "do not repeat their issues" in prompt
     assert "do not ask" in prompt
     assert "direct question" in prompt

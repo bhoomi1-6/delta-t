@@ -55,7 +55,7 @@ def _simulation_inputs(
                     std=0,
                     start_time=start,
                     end_time=end,
-                    location=item.get("location") or "Unknown",
+                    location=item.get("location"),
                 )
             )
             meeting_ids[simulation_title] = item["id"]
@@ -75,7 +75,7 @@ def _simulation_inputs(
                     std=event.std,
                     start_time=start,
                     end_time=end,
-                    location=event.location or "Unknown",
+                    location=event.location,
                 )
             )
             meeting_ids[simulation_title] = event.id
@@ -411,7 +411,7 @@ def predict_outcomes(
         "task_diagnostics": task_diagnostics,
         "limitations": [
             "Disruption forecasts and transit-shock scenarios are disabled; travel still uses the simulator's baseline delay and weather adjustments.",
-            "Task start times affect task priority/order, not exact clock-time blocking.",
+            "The task schedule defines a strict work priority: available work time goes to the first unfinished divisible task until it is complete or its deadline passes, then proceeds to the next task. Tasks marked indivisible are attempted only when a single available work window can fit their remaining effort.",
             "Event duration is sampled from a normal distribution centered on the scheduled duration, using std as its standard deviation and clamping samples at zero.",
             "Task probabilities do not include per-run failure-cause attribution; task diagnostics are screening facts, not proof of which factor caused a simulated failure.",
         ],

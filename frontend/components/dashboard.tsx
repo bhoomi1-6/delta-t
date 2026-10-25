@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import { signOut } from "next-auth/react";
 import {
@@ -67,6 +67,7 @@ export type InfoCard = {
 };
 
 type PredictResponse = {
+  simulation_day: string;
   review: {
     original_prediction: {
       num_simulations_per_scenario: number;
@@ -78,14 +79,31 @@ type PredictResponse = {
       task_diagnostics: TaskDiagnostic[];
     };
     judge: {
-      measured_verdict: string;
-      average_failure_risk_percent: { original: number; repaired: number };
       analysis: { summary: string; remaining_risks: string[] };
     };
+    conditions: Array<{
+      title: string;
+      start: string;
+      weather: {
+        forecast_available?: number;
+        precipitation_probability?: number;
+        precipitation_mm?: number;
+        rain_mm?: number;
+        wind_speed_kmh?: number;
+      };
+    }>;
     repair: {
       changes: string[];
       warnings: string[];
-      proposed_plan: { tasks: Array<{ id: string; title: string }> };
+      proposed_plan: {
+        tasks: Array<{
+          id: string;
+          title: string;
+          deadline: string | null;
+          estimated_length: number;
+          completion_pct: number;
+        }>;
+      };
       proposed_task_schedule: Array<{
         task_id: string;
         start_time: number;
@@ -106,19 +124,19 @@ type TaskDiagnostic = {
   deadline_within_simulation_horizon: boolean;
 };
 
-function summarisePrediction({ review }: PredictResponse) {
+function summarisePrediction({ review, simulation_day: simulationDay }: PredictResponse) {
   const { judge, repair } = review;
-  const risk = judge.average_failure_risk_percent;
   const taskNames = new Map(
-    repair.proposed_plan.tasks.map((task) => [task.id, task.title]),
+    repair.proposed_plan.tasks.map((task) => [task.id, task]),
   );
   const proposedTaskOrder = [...repair.proposed_task_schedule]
     .sort((left, right) => left.start_time - right.start_time)
     .map((item) => ({
       id: item.task_id,
-      name: taskNames.get(item.task_id) ?? "Task",
-      reasoning: item.reasoning.trim(),
-    }));
+      task: taskNames.get(item.task_id),
+      name: taskNames.get(item.task_id)?.title ?? "Task",
+    }))
+    .filter((item) => !item.task || item.task.completion_pct < 100);
   const formatRisk = (value: number | undefined) =>
     value === undefined ? "not returned" : `${value.toFixed(1)}%`;
   const riskKey = (item: NamedRisk) => `${item.category}\u0000${item.name}`;
@@ -129,19 +147,19 @@ function summarisePrediction({ review }: PredictResponse) {
     review.repaired_prediction.risk_by_name.map((item) => [riskKey(item), item]),
   );
   const originalDiagnostics = new Map(
-    review.original_prediction.task_diagnostics.map((item) => [item.name, item]),
+    review.original_prediction.task_diagnostics.map((item) => [
+      item.name,
+      item.deadline_within_simulation_horizon,
+    ]),
   );
   const repairedDiagnostics = new Map(
-    review.repaired_prediction.task_diagnostics.map((item) => [item.name, item]),
+    review.repaired_prediction.task_diagnostics.map((item) => [
+      item.name,
+      item.deadline_within_simulation_horizon,
+    ]),
   );
   const taskOutcomeLines: string[] = [];
-  const eventRiskCards: InfoCard[] = [];
-  const describeRiskChange = (before: number, after: number) => {
-    const change = after - before;
-    if (change > 0) return `risk increased by ${change.toFixed(1)} percentage points in the revised simulation`;
-    if (change < 0) return `risk decreased by ${Math.abs(change).toFixed(1)} percentage points in the revised simulation`;
-    return "risk was unchanged in the revised simulation";
-  };
+  const eventOutcomeLines: string[] = [];
 
   for (const [key, original] of originalRisks) {
     if (original.category === "unfinished_tasks") continue;
@@ -149,105 +167,228 @@ function summarisePrediction({ review }: PredictResponse) {
     const originalDeadlineRisk = original.failure_probability_percent;
     if (original.category === "meetings") {
       const repairedRisk = repaired?.failure_probability_percent;
-      if (originalDeadlineRisk === 0 && repairedRisk === 0) continue;
-      const comparison = repairedRisk === undefined
-        ? "Revised simulation risk not returned."
-        : `${describeRiskChange(originalDeadlineRisk, repairedRisk)}.`;
-      eventRiskCards.push({
-        id: `event-risk-${eventRiskCards.length}`,
-        category: "Event risk",
-        title: original.name,
-        description: `Missed-event risk: ${formatRisk(originalDeadlineRisk)} → ${formatRisk(repairedRisk)}. ${comparison} Consider leaving earlier, checking alternate transport or routes, or asking whether the event can be rescheduled. These options were not tested by the simulation, and your calendar was not changed.`,
-      });
+      if (originalDeadlineRisk !== 0 || (repairedRisk ?? 0) !== 0) {
+        eventOutcomeLines.push(
+          repairedRisk === undefined
+            ? `${original.name} — final missed-event risk was not returned.`
+            : `${original.name} — missed-event risk: ${formatRisk(repairedRisk)}.`,
+        );
+      }
       continue;
     }
 
-    const diagnostic = originalDiagnostics.get(original.name);
-    const repairedDiagnostic = repairedDiagnostics.get(original.name);
-    const withinHorizon =
-      diagnostic?.deadline_within_simulation_horizon ??
-      repairedDiagnostic?.deadline_within_simulation_horizon;
     const unfinishedKey = riskKey({
       ...original,
       category: "unfinished_tasks",
     });
     const originalUnfinished = originalRisks.get(unfinishedKey)?.failure_probability_percent;
     const repairedUnfinished = repairedRisks.get(unfinishedKey)?.failure_probability_percent;
-    if (withinHorizon === true) {
-      const after = repaired?.failure_probability_percent;
-      if (originalDeadlineRisk !== 0 || after !== 0) {
-        taskOutcomeLines.push(
-          `${original.name} — missed deadline: ${formatRisk(originalDeadlineRisk)} → ${formatRisk(after)}${after === undefined ? " (revised simulation risk not returned)" : `; ${describeRiskChange(originalDeadlineRisk, after)}`}.`,
-        );
-      }
-    } else if (
-      withinHorizon === false &&
-      originalUnfinished !== undefined &&
-      (originalUnfinished !== 0 || repairedUnfinished !== 0)
+    const after = repaired?.failure_probability_percent;
+    const deadlineWithinHorizon =
+      originalDiagnostics.get(original.name) ??
+      repairedDiagnostics.get(original.name);
+    if (
+      deadlineWithinHorizon !== false &&
+      (originalDeadlineRisk !== 0 || (after ?? 0) !== 0)
     ) {
-      const after = repairedUnfinished;
       taskOutcomeLines.push(
-        `${original.name} — unfinished at the 7-day simulation horizon: ${formatRisk(originalUnfinished)} → ${formatRisk(after)}${after === undefined ? " (revised simulation risk not returned)" : `; ${describeRiskChange(originalUnfinished, after)}`}.`,
+        after === undefined
+          ? `${original.name} — final missed-deadline risk was not returned.`
+          : `${original.name} — missed deadline: ${formatRisk(after)}.`,
+      );
+    }
+    if (
+      deadlineWithinHorizon === false &&
+      originalUnfinished !== undefined &&
+      (originalUnfinished !== 0 || (repairedUnfinished ?? 0) !== 0)
+    ) {
+      taskOutcomeLines.push(
+        repairedUnfinished === undefined
+          ? `${original.name} — final unfinished-task risk at the 7-day simulation horizon was not returned.`
+          : `${original.name} — unfinished at the 7-day simulation horizon: ${formatRisk(repairedUnfinished)}.`,
       );
     }
   }
 
-  const riskCards: InfoCard[] = [
-    ...(originalRisks.size > 0 &&
-    [...originalRisks.values()].some((item) => item.category === "meetings") &&
-    eventRiskCards.length === 0
+  const trackedEvents = [...originalRisks.values()].filter(
+    (item) => item.category === "meetings",
+  );
+  const eventSummary = trackedEvents.length === 0
+    ? "No events were included in the simulation."
+    : eventOutcomeLines.length === 0
+      ? `No events were missed in ${review.original_prediction.num_simulations_per_scenario.toLocaleString()} simulations (not a guarantee).`
+      : `Simulated missed-event risk for ${eventOutcomeLines.length} event${eventOutcomeLines.length === 1 ? "" : "s"}. View details for estimates.`;
+  const trackedTasks = [...originalRisks.values()].filter(
+    (item) => item.category === "tasks",
+  );
+  const taskSummary = taskOutcomeLines.length > 0
+    ? taskOutcomeLines.join("\n")
+    : trackedTasks.length === 0
+      ? "No tasks to check."
+      : "No task failures were observed in the simulations.";
+
+  const weatherConditions = review.conditions ?? [];
+  const availableForecasts = weatherConditions.filter(
+    (item) => item.weather.forecast_available === 1,
+  );
+  const weatherAdvice = availableForecasts.flatMap((item) => {
+    const advice: string[] = [];
+    const chance = item.weather.precipitation_probability ?? 0;
+    const rainAmount = Math.max(
+      item.weather.precipitation_mm ?? 0,
+      item.weather.rain_mm ?? 0,
+    );
+    const wind = item.weather.wind_speed_kmh ?? 0;
+    const eventName = item.title;
+    const eventRisk = originalRisks.get(
+      riskKey({
+        name: eventName,
+        category: "meetings",
+        failure_probability_percent: 0,
+      }),
+    )?.failure_probability_percent ?? 0;
+    const revisedEventRisk = repairedRisks.get(
+      riskKey({
+        name: eventName,
+        category: "meetings",
+        failure_probability_percent: 0,
+      }),
+    )?.failure_probability_percent ?? 0;
+    const hasEventRisk = eventRisk > 0 || revisedEventRisk > 0;
+    const weatherMayAffectActiveTravel =
+      (chance >= 30 && rainAmount > 0) || wind >= 25;
+
+    if (chance >= 50 && rainAmount >= 1) {
+      advice.push("Rain is likely around your scheduled events; take waterproofs or an umbrella.");
+    } else if (chance >= 30 && rainAmount > 0) {
+      advice.push("Light rain is possible; a lightweight waterproof jacket should be enough.");
+    } else if (chance >= 60) {
+      advice.push("Rain is likely; bring a lightweight waterproof layer.");
+    }
+
+    if (wind >= 40) {
+      advice.push("Strong winds are forecast; wear a windproof layer and allow extra time if walking or cycling.");
+    } else if (wind >= 25) {
+      advice.push("It will be breezy; a wind-resistant layer may help.");
+    }
+
+    if (hasEventRisk && weatherMayAffectActiveTravel) {
+      advice.push(`${eventName} has simulated missed-event risk. Rain or wind may slow walking or cycling; consider leaving earlier or using another transport option. Weather was not identified as the cause.`);
+    }
+
+    return advice;
+  });
+  const reportedRiskNames = [...originalRisks.values()]
+    .filter((item) => {
+      const revisedRisk = repairedRisks.get(riskKey(item))?.failure_probability_percent;
+      return item.failure_probability_percent > 0 || (revisedRisk ?? 0) > 0;
+    })
+    .map((item) => item.name.toLocaleLowerCase());
+  const additionalWatchouts = [...new Set([
+    ...repair.warnings,
+    ...judge.analysis.remaining_risks.filter((warning) =>
+      !reportedRiskNames.some((name) => warning.toLocaleLowerCase().includes(name)),
+    ),
+  ])];
+
+  const dueBySimulationDay = proposedTaskOrder.filter(
+    (item) =>
+      item.task?.deadline !== null &&
+      item.task?.deadline !== undefined &&
+      item.task.deadline.slice(0, 10) <= simulationDay,
+  );
+  const focusTasks = (dueBySimulationDay.length > 0 ? dueBySimulationDay : proposedTaskOrder).slice(0, 1);
+  const focusCard: InfoCard = focusTasks.length > 0
+    ? {
+        id: "tomorrow-focus",
+        category: "Tomorrow's focus",
+        title: "What to work on tomorrow",
+        description: focusTasks.map((task) => {
+          const remainingMinutes = task.task
+            ? Math.max(0, Math.round(task.task.estimated_length * (1 - task.task.completion_pct / 100)))
+            : null;
+          const deadline = task.task?.deadline
+            ? ` — due ${formatDeadline(task.task.deadline.slice(0, 10))}`
+            : "";
+          const effort = remainingMinutes === null ? "" : `, about ${remainingMinutes} min`;
+          const deadlineRisk = repairedRisks.get(
+            riskKey({
+              name: task.name,
+              category: "tasks",
+              failure_probability_percent: 0,
+            }),
+          )?.failure_probability_percent;
+          const canReportDeadlineRisk =
+            repairedDiagnostics.get(task.name) ??
+            originalDiagnostics.get(task.name);
+          const riskNote = deadlineRisk === undefined || canReportDeadlineRisk !== true
+            ? ""
+            : `; ${formatRisk(deadlineRisk)} simulated chance of missing the deadline`;
+          return `Start with ${task.name}${deadline}${effort}${riskNote}.`;
+        }).join("\n"),
+      }
+    : {
+        id: "tomorrow-focus",
+        category: "Tomorrow's focus",
+        title: "What to work on tomorrow",
+        description: "No unfinished tasks to prioritize.",
+      };
+  const summaryCards: InfoCard[] = [
+    {
+      id: "event-attendance",
+      category: "Events",
+      title: trackedEvents.length === 0
+        ? "No events to check"
+        : eventOutcomeLines.length === 0
+          ? "No events were missed"
+          : "Event attendance risks",
+      description: eventSummary,
+    },
+    focusCard,
+    ...(weatherAdvice.length > 0
       ? [{
-          id: "event-attendance",
-          category: "Event attendance",
-          title: "No events were missed in the simulations",
-          description: `All tracked events were reached in both the original and revised schedules across ${review.original_prediction.num_simulations_per_scenario.toLocaleString()} simulations per schedule. This is a simulation result, not a guarantee.`,
+          id: "weather-advice",
+          category: "Weather advice",
+          title: "Weather heads-up",
+          description: [...new Set(weatherAdvice)].join("\n"),
         }]
       : []),
-    ...eventRiskCards,
+  ];
+  const detailCards: InfoCard[] = [
+    ...(eventOutcomeLines.length > 0
+      ? [{
+          id: "event-outcomes",
+          category: "Events",
+          title: "Event attendance risks",
+          description: eventOutcomeLines.join("\n"),
+        }]
+      : []),
     ...(taskOutcomeLines.length > 0
       ? [{
-          id: "task-risk-summary",
-          category: "Task outcomes",
-          title: "Task risk in original vs revised simulation",
-          description: taskOutcomeLines.join("\n"),
+          id: "task-outcomes",
+          category: "Task results",
+          title: "Deadline and unfinished-task risks",
+          description: taskSummary,
         }]
       : []),
-  ];
-
-  const cards: InfoCard[] = [
-    ...riskCards,
-    {
-      id: "risk",
-      category: "Risk",
-      title: `Average failure risk: ${judge.measured_verdict}`,
-      description: risk.original === 0 && risk.repaired === 0
-        ? "No failures were observed across tracked items in either simulated schedule."
-        : `Average measured failure risk across tracked tasks and events: ${risk.original.toFixed(1)}% in the original simulation and ${risk.repaired.toFixed(1)}% in the revised simulation.`,
-    },
-    ...(proposedTaskOrder.length > 0
+    ...((repair.changes.length > 0 ||
+    additionalWatchouts.length > 0)
       ? [{
-          id: "proposed-task-order",
-          category: "Suggested priority",
-          title: "Proposed order for the revised simulation",
-          description: `The baseline simulation automatically prioritizes tasks using their deadlines and remaining estimated effort. The revised simulation uses this proposed order:\n\n${proposedTaskOrder.map((task, index) =>
-            `${index + 1}. ${task.name}${task.reasoning ? ` — ${task.reasoning}` : ""}`
-          ).join("\n")}\n\nThis order is a priority hint, not a reserved timetable. It does not move calendar events or guarantee the task will be completed.`,
+          id: "adjustments-watchouts",
+          category: "Suggested adjustments",
+          title: "Changes and remaining watch-outs",
+          description: [
+            ...(repair.changes.length > 0
+              ? [`Suggestions:\n${[...new Set(repair.changes)].join("\n")}`]
+              : []),
+            ...(additionalWatchouts.length > 0
+              ? [`Watch-outs:\n${additionalWatchouts.join("\n")}`]
+              : []),
+          ].join("\n\n"),
         }]
       : []),
-    ...repair.changes.map((change, index) => ({
-      id: `change-${index}`,
-      category: "Change",
-      title: "Suggested change",
-      description: change,
-    })),
-    ...[...repair.warnings, ...judge.analysis.remaining_risks].map((text, index) => ({
-      id: `watch-${index}`,
-      category: "Watch out",
-      title: "Remaining risk",
-      description: text,
-    })),
   ];
-  return { suggestionText: judge.analysis.summary, cards };
+  return { suggestionText: judge.analysis.summary, summaryCards, detailCards };
 }
 
 type DashboardProps = {
@@ -319,6 +460,9 @@ export default function Dashboard({
   const [predictionMessage, setPredictionMessage] = useState("");
   const [completedSimulationCount, setCompletedSimulationCount] = useState<number | null>(null);
   const [prediction, setPrediction] = useState<ReturnType<typeof summarisePrediction> | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const detailsDialogRef = useRef<HTMLElement | null>(null);
   const [simulationCount, setSimulationCount] = useState(DEFAULT_SIMULATION_COUNT);
   const [preferredTransportMode, setPreferredTransportMode] = useState<TransportMode>("fastest");
   const [homeLocation, setHomeLocation] = useState(DEFAULT_HOME_LOCATION);
@@ -326,8 +470,41 @@ export default function Dashboard({
   const [workdayEndHour, setWorkdayEndHour] = useState(DEFAULT_WORKDAY_END_HOUR);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
-  const shownCards = prediction?.cards ?? informationCards;
+  const shownCards = prediction?.summaryCards ?? informationCards;
   const shownSuggestion = prediction?.suggestionText ?? suggestionText;
+
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const detailsTrigger = detailsTriggerRef.current;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDetailsOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = detailsDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+      detailsTrigger?.focus();
+    };
+  }, [detailsOpen]);
 
   useEffect(() => {
     let active = true;
@@ -1076,19 +1253,19 @@ export default function Dashboard({
             </section>
           </div>
 
-          <div className="right-stack">
+          <div className={`right-stack${prediction ? " prediction-active" : ""}`}>
             <section className="panel info-panel" aria-labelledby="info-heading">
               <div className="panel-heading compact-heading">
                 <div className="heading-text">
                   <div className="section-icon peach"><BookOpen size={20} /></div>
                   <div>
                     <h2 id="info-heading">Information cards</h2>
-                    <p>Generated insights from your AI</p>
+                    <p>Key results, tomorrow&apos;s focus and context</p>
                   </div>
                 </div>
                 <div className="ai-label"><span className="ai-pulse" /> AI SPACE</div>
               </div>
-              <div className="cards-scroll scroll-area" aria-live="polite">
+              <div className={`cards-scroll scroll-area${prediction ? " prediction-summary" : ""}`} aria-live="polite">
                 {shownCards.length === 0 ? (
                   <div className="small-empty-state"><div className="empty-ring"><BookOpen size={24} /></div><h3>AI information</h3><p>Information cards generated by your LLM will appear here.</p></div>
                 ) : (
@@ -1100,10 +1277,21 @@ export default function Dashboard({
                     </article>
                   ))
                 )}
+                {prediction && (
+                  <button
+                    type="button"
+                    className="details-open-button"
+                    ref={detailsTriggerRef}
+                    onClick={() => setDetailsOpen(true)}
+                  >
+                    View simulation details
+                    <ChevronDown size={15} aria-hidden="true" />
+                  </button>
+                )}
               </div>
             </section>
 
-            <section className="panel suggestions-panel" aria-labelledby="suggestions-heading">
+            {!prediction && <section className="panel suggestions-panel" aria-labelledby="suggestions-heading">
               <div className="panel-heading compact-heading">
                 <div className="heading-text">
                   <div className="section-icon mint"><Sparkles size={20} /></div>
@@ -1118,7 +1306,7 @@ export default function Dashboard({
                   <div className="suggestion-empty"><div className="suggestion-glow"><Lightbulb size={29} /></div><h3>Fresh ideas, when you need them.</h3><p>Once you connect your LLM, its personalised suggestions will appear right here.</p><span className="llm-hint"><CircleHelp size={14} /> Add your response in <code>app/page.tsx</code></span></div>
                 )}
               </div>
-            </section>
+            </section>}
           </div>
         </div>
         ) : (
@@ -1222,6 +1410,58 @@ export default function Dashboard({
           </section>
         )}
       </main>
+      {detailsOpen && prediction && (
+        <div
+          className="details-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setDetailsOpen(false);
+          }}
+        >
+          <section
+            className="details-dialog"
+            ref={detailsDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="details-dialog-heading"
+          >
+            <div className="details-dialog-heading">
+              <div>
+                <span className="card-category">SIMULATION RESULTS</span>
+                <h2 id="details-dialog-heading">Detailed results</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button details-close-button"
+                aria-label="Close simulation details"
+                autoFocus
+                onClick={() => setDetailsOpen(false)}
+              >
+                <X size={19} />
+              </button>
+            </div>
+            <div className="details-dialog-content">
+              {prediction.suggestionText.trim() && (
+                <article className="info-card">
+                  <div className="card-topline"><span className="card-category">AI advice</span></div>
+                  <h3>Suggested changes</h3>
+                  <p>{prediction.suggestionText}</p>
+                </article>
+              )}
+              {prediction.detailCards.map((card) => (
+                <article className="info-card" key={card.id}>
+                  {card.category && <div className="card-topline"><span className="card-category">{card.category}</span></div>}
+                  <h3>{card.title}</h3>
+                  <p>{card.description}</p>
+                </article>
+              ))}
+              {prediction.detailCards.length === 0 && !prediction.suggestionText.trim() && (
+                <p className="details-empty">No additional simulation details are available.</p>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

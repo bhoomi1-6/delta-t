@@ -41,6 +41,7 @@ def test_tasks_pause_at_seven_and_resume_on_following_day(
     )
 
     assert result["task_failure_probabilities"].get("Write-up", 0.0) == expected_failure
+    assert "any_failure_probability_percent" not in result
 
 
 def test_simulation_uses_configured_workday_hours(
@@ -125,6 +126,99 @@ def test_atomic_tasks_need_one_uninterrupted_work_block(
     )
 
     assert result["task_failure_probabilities"].get("Go to shops", 0.0) == expected_failure
+
+
+def test_simulation_finishes_first_divisible_task_before_starting_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(simulation.np.random, "rand", lambda: 1.0)
+    urgent = simulation._ActiveTask(
+        title="Due tomorrow",
+        remaining_mins=90,
+        deadline=datetime(2026, 10, 26, 23, 59),
+        priority=0,
+        can_be_divided=True,
+    )
+    later = simulation._ActiveTask(
+        title="Due the day after",
+        remaining_mins=60,
+        deadline=datetime(2026, 10, 27, 23, 59),
+        priority=1,
+        can_be_divided=True,
+    )
+    tasks = [urgent, later]
+
+    end_of_first_work_block = simulation._work_on_tasks(
+        tasks,
+        datetime(2026, 10, 26, 8),
+        datetime(2026, 10, 26, 9),
+        set(),
+    )
+
+    assert end_of_first_work_block == datetime(2026, 10, 26, 9)
+    assert urgent.remaining_mins == 30
+    assert later.remaining_mins == 60
+
+    end_of_second_work_block = simulation._work_on_tasks(
+        tasks,
+        end_of_first_work_block,
+        datetime(2026, 10, 26, 11),
+        set(),
+    )
+
+    assert end_of_second_work_block == datetime(2026, 10, 26, 10, 30)
+    assert urgent.remaining_mins == 0
+    assert later.remaining_mins == 0
+
+
+def test_back_to_back_events_flag_arrival_late_after_travel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(simulation.np.random, "rand", lambda: 1.0)
+    base_date = datetime(2026, 10, 26, 8)
+    events = [
+        Event(
+            id="lecture",
+            title="Maths Institute",
+            kind="fixed",
+            std=0,
+            start_time=datetime(2026, 10, 26, 9, 5),
+            end_time=datetime(2026, 10, 26, 10, 55),
+            location="Maths Institute",
+        ),
+        Event(
+            id="lunch",
+            title="Cosy Club lunch",
+            kind="fixed",
+            std=0,
+            start_time=datetime(2026, 10, 26, 11),
+            end_time=datetime(2026, 10, 26, 12),
+            location="Cosy Club",
+        ),
+    ]
+
+    result = simulation.simulate(
+        simulation_base_date=base_date,
+        events=events,
+        tasks=[],
+        transit_shock_active=False,
+        num_simulations=1,
+        route_cache={
+            "Maths Institute_to_Maths Institute": {
+                "walking": 0.0,
+                "transit": 0.0,
+                "cycling": 0.0,
+            },
+            "Maths Institute_to_Cosy Club": {
+                "walking": 10.0,
+                "transit": 10.0,
+                "cycling": 10.0,
+            },
+        },
+        starting_location="Maths Institute",
+    )
+    assert result["meeting_failure_probabilities"].get("Cosy Club lunch") == 100.0
+    assert result["meeting_failure_probabilities"].get("Cosy Club lunch") == 100.0
 
 
 def test_simulation_requires_matching_datetime_timezone_awareness() -> None:

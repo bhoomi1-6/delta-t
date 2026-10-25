@@ -60,6 +60,23 @@ def test_weather_batch_fetches_each_local_day_once_and_returns_wind(
     )
     assert [item["wind_speed_kmh"] for item in result] == [12.0, 38.0]
     assert [item["precipitation_probability"] for item in result] == [20.0, 40.0]
+    assert [item["forecast_available"] for item in result] == [1.0, 1.0]
 
     weather.get_oxford_weather_forecasts(targets)
     assert len(requests) == 1
+
+
+def test_weather_fallback_is_marked_unavailable(monkeypatch) -> None:
+    weather._WEATHER_CACHE.clear()
+
+    def fail_request(*_args, **_kwargs):
+        raise weather.requests.ConnectionError("offline")
+
+    monkeypatch.setattr(weather.requests, "get", fail_request)
+
+    [forecast] = weather.get_oxford_weather_forecasts(
+        [datetime(2026, 10, 25, 10)]
+    )
+
+    assert forecast["forecast_available"] == 0.0
+    assert forecast["precipitation_probability"] == 0.0

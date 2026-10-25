@@ -57,10 +57,13 @@ def _validate_proposal(plan: Plan, proposal: RepairProposal) -> RepairProposal:
             f"(missing: {missing}; unexpected: {unexpected})."
         )
     if any(
-        proposed_tasks[task_id].deadline != original_task.deadline
+        proposed_tasks[task_id] != original_task
         for task_id, original_task in original_tasks.items()
     ):
-        raise ValueError("Repair proposal must preserve task deadlines.")
+        raise ValueError(
+            "Repair proposal must preserve all task details, including title, "
+            "effort, completion, divisibility, and deadline."
+        )
 
     scheduled_ids = [item.task_id for item in proposal.proposed_task_schedule]
     if len(set(scheduled_ids)) != len(scheduled_ids):
@@ -162,14 +165,20 @@ Hard constraints:
 - proposed_plan must contain exactly the original user event IDs
   {json.dumps(event_ids)} and task IDs {json.dumps(task_ids)}. Preserve IDs
   exactly in schema fields; never use IDs in user-facing prose.
-- Preserve every event kind and every task deadline. Fixed user events must
-  remain unchanged.
+- Preserve every event kind and every task detail, including title, estimated
+  effort, completion, divisibility, and deadline. Fixed user events must remain
+  unchanged.
 - Tasks can be worked on across multiple sessions unless the original task
   explicitly has can_be_divided set to false. Do not treat a task as requiring
   one uninterrupted block otherwise.
 - Schedule task starts within the user's configured workday above. Avoid
   event/calendar conflicts and leave enough time for travel where route
   estimates are available. Do not place work after a task's deadline.
+- The simulation works through its task order strictly: an unfinished
+  divisible task receives available work time before later tasks, until it is
+  complete or its deadline passes. Use the schedule order to prioritize tasks
+  by deadline pressure and remaining effort, and do not imply that a later
+  task will be worked on concurrently.
 
 Repair priorities:
 1. Identify the highest-risk tasks and events by name using measured
@@ -181,8 +190,9 @@ Repair priorities:
    feasibility conflict, not something task reordering can fix.
 3. Make only changes representable in this proposal and supported by the
    supplied inputs. Do not describe moving a task earlier/later as a fix for
-   an infeasible deadline. Task start times are ordering hints, not reserved
-   calendar blocks, so do not imply they create a verified time block.
+   an infeasible deadline. Task start times define simulation priority order,
+   not reserved calendar blocks, so do not imply they create a verified time
+   block.
 4. When a calendar event causes a meaningful conflict, assess its likely
    flexibility cautiously from its title and description. Lectures, classes,
    exams, interviews, and explicit appointments are usually likely fixed;
@@ -258,7 +268,8 @@ Your previous proposal was rejected by validation:
 Regenerate the complete proposal. Use exactly the required event and task IDs
 listed above; do not include Google Calendar commitments in proposed_plan.
 Ensure proposed_plan includes every original user event and task ID. Preserve
-fixed events exactly and schedule every task exactly once.
+fixed events and all task details exactly, and schedule every task exactly
+once.
 """
 
     raise RuntimeError("Repair generation ended without a validated proposal.")
