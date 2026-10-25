@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime, time, timedelta
 
-from app.agents.chaos import AgentContext, ChaosReport, Prediction, TaskScheduleItem
+from app.agents.chaos import AgentContext, Prediction, TaskScheduleItem
 from app.agents.schemas import Plan
 from app.integrations import simulation
 from app.models import Event, EventKind, Task
@@ -22,20 +21,6 @@ class _SimulationInputs:
     meeting_ids: dict[str, str]
     task_ids: dict[str, str]
     display_names: dict[str, str]
-
-
-def _legacy_context(
-    calendar_events: list[dict[str, object]],
-    conditions: list[dict[str, object]],
-    day_start: datetime,
-) -> AgentContext:
-    """Adapt the former positional predictor inputs to the shared context."""
-    return {
-        "calendar_commitments": calendar_events,
-        "conditions": conditions,
-        "starting_location": "",
-        "day_start": day_start,
-    }
 
 
 def _local_naive(value: datetime) -> datetime:
@@ -154,19 +139,6 @@ def _simulation_inputs(
     )
 
 
-def _blend_probabilities(
-    nominal: dict[str, float],
-    shocked: dict[str, float],
-    shock_probability: float,
-) -> dict[str, float]:
-    names = set(nominal) | set(shocked)
-    return {
-        name: (1 - shock_probability) * nominal.get(name, 0.0)
-        + shock_probability * shocked.get(name, 0.0)
-        for name in sorted(names)
-    }
-
-
 def _map_risks_by_id(
     probabilities: dict[str, float],
     names_to_ids: dict[str, str],
@@ -211,11 +183,130 @@ def _named_risks(
     return named_risks
 
 
+def _task_work_capacity(
+    base: datetime,
+    deadline: datetime,
+    events: list[Event],
+    workday_start_hour: int,
+    workday_end_hour: int,
+) -> tuple[float, float]:
+    """Return modeled work minutes and the longest uninterrupted window."""
+    effective_deadline = min(deadline, base + simulation.SIMULATION_HORIZON)
+    available_minutes = 0.0
+    longest_window_minutes = 0.0
+    current_date = base.date()
+
+    while current_date <= effective_deadline.date():
+        work_start = max(
+            datetime.combine(
+                current_date,
+                time(hour=workday_start_hour),
+                tzinfo=base.tzinfo,
+            ),
+            base,
+        )
+        cutoff_date = (
+            current_date + timedelta(days=1)
+            if workday_end_hour == 24
+            else current_date
+        )
+        work_end = min(
+            datetime.combine(
+                cutoff_date,
+                time(0) if workday_end_hour == 24 else time(hour=workday_end_hour),
+                tzinfo=base.tzinfo,
+            ),
+            effective_deadline,
+        )
+        if work_start < work_end:
+            cursor = work_start
+            for event in sorted(events, key=lambda item: item.start_time):
+                blocked_start = max(work_start, event.start_time)
+                blocked_end = min(work_end, event.end_time)
+                if blocked_start >= blocked_end:
+                    continue
+                if blocked_start > cursor:
+                    gap_minutes = (blocked_start - cursor).total_seconds() / 60
+                    available_minutes += gap_minutes
+                    longest_window_minutes = max(longest_window_minutes, gap_minutes)
+                cursor = max(cursor, blocked_end)
+                if cursor >= work_end:
+                    break
+            if cursor < work_end:
+                gap_minutes = (work_end - cursor).total_seconds() / 60
+                available_minutes += gap_minutes
+                longest_window_minutes = max(longest_window_minutes, gap_minutes)
+        current_date += timedelta(days=1)
+
+    return available_minutes, longest_window_minutes
+
+
+def _task_diagnostics(
+    plan: Plan,
+    inputs: _SimulationInputs,
+    risks_by_id: dict[str, dict[str, float]],
+    base: datetime,
+    workday_start_hour: int,
+    workday_end_hour: int,
+) -> list[dict[str, object]]:
+    """Summarize measurable task constraints without claiming causal attribution."""
+    simulated_tasks = {task.id: task for task in inputs.tasks}
+    diagnostics: list[dict[str, object]] = []
+    for task in plan.tasks:
+        simulated_task = simulated_tasks[task.id]
+        remaining_effort = task.estimated_length * (
+            1.0 - task.completion_pct / 100.0
+        )
+        available_minutes, longest_window_minutes = _task_work_capacity(
+            base,
+            simulated_task.deadline,
+            inputs.events,
+            workday_start_hour,
+            workday_end_hour,
+        )
+        potential_constraints: list[str] = []
+        if remaining_effort > available_minutes:
+            potential_constraints.append(
+                "Remaining estimated effort exceeds all modeled work-window time "
+                "before the deadline, even before travel, event overruns, "
+                "distractions, or other tasks."
+            )
+        if not task.can_be_divided and remaining_effort > longest_window_minutes:
+            potential_constraints.append(
+                "The task is indivisible and its remaining estimated effort exceeds "
+                "the longest modeled uninterrupted work window before the deadline."
+            )
+        diagnostics.append(
+            {
+                "name": task.title,
+                "failure_probability_percent": risks_by_id["tasks"].get(task.id, 0.0),
+                "unfinished_probability_percent": risks_by_id[
+                    "unfinished_tasks"
+                ].get(task.id, 0.0),
+                "remaining_effort_minutes": round(remaining_effort, 1),
+                "deadline": simulated_task.deadline.isoformat(),
+                "deadline_source": (
+                    "provided" if task.deadline is not None else "simulator_default"
+                ),
+                "deadline_within_simulation_horizon": (
+                    simulated_task.deadline <= base + simulation.SIMULATION_HORIZON
+                ),
+                "can_be_divided": task.can_be_divided,
+                "available_work_minutes_before_deadline": round(
+                    available_minutes, 1
+                ),
+                "longest_uninterrupted_work_window_minutes": round(
+                    longest_window_minutes, 1
+                ),
+                "potential_constraints": potential_constraints,
+            }
+        )
+    return diagnostics
+
+
 def predict_outcomes(
     plan: Plan,
-    context: AgentContext | list[dict[str, object]],
-    chaos: ChaosReport | list[dict[str, object]],
-    *legacy_args: object,
+    context: AgentContext,
     task_schedule: list[TaskScheduleItem] | None = None,
     num_simulations: int = 5000,
 ) -> Prediction:
@@ -228,100 +319,72 @@ def predict_outcomes(
     if num_simulations < 1:
         raise ValueError("num_simulations must be at least 1.")
 
-    if isinstance(context, dict):
-        if not isinstance(chaos, ChaosReport) or legacy_args:
-            raise TypeError("Shared context must be paired with a ChaosReport.")
-        shared_context = context
-        chaos_report = chaos
-    else:
-        if (
-            not isinstance(chaos, list)
-            or len(legacy_args) != 2
-            or not isinstance(legacy_args[0], ChaosReport)
-            or not isinstance(legacy_args[1], datetime)
-        ):
-            raise TypeError("Legacy predictor calls require calendar, context, chaos, and day_start.")
-        shared_context = _legacy_context(context, chaos, legacy_args[1])
-        chaos_report = legacy_args[0]
-
-    day_start = shared_context["day_start"]
-    inputs = _simulation_inputs(plan, shared_context, task_schedule, day_start)
+    day_start = context["day_start"]
+    inputs = _simulation_inputs(plan, context, task_schedule, day_start)
     base = day_start.astimezone(LOCAL_TIMEZONE).replace(tzinfo=None)
     starting_location = (
-        shared_context["starting_location"] or simulation.DEFAULT_STARTING_LOCATION
+        context["starting_location"] or simulation.DEFAULT_STARTING_LOCATION
     )
-    preferred_transport_mode = shared_context.get(
+    preferred_transport_mode = context.get(
         "preferred_transport_mode", "fastest"
     )
-    workday_start_hour = shared_context.get("workday_start_hour", 8)
-    workday_end_hour = shared_context.get("workday_end_hour", 19)
-    shock_probability = chaos_report.transit_shock_probability
-
-    def run_simulation(transit_shock_active: bool) -> dict[str, Any]:
-        return simulation.simulate(
-            base,
-            inputs.events,
-            inputs.tasks,
-            transit_shock_active=transit_shock_active,
-            num_simulations=num_simulations,
-            route_cache=inputs.route_cache,
-            weather_cache=inputs.weather_cache,
-            starting_location=starting_location,
-            preferred_transport_mode=preferred_transport_mode,
-            workday_start_hour=workday_start_hour,
-            workday_end_hour=workday_end_hour,
-        )
-
-    if shock_probability == 0.0:
-        nominal = run_simulation(transit_shock_active=False)
-        shocked = nominal
-    elif shock_probability == 1.0:
-        shocked = run_simulation(transit_shock_active=True)
-        nominal = shocked
-    else:
-        nominal = run_simulation(transit_shock_active=False)
-        shocked = run_simulation(transit_shock_active=True)
+    workday_start_hour = context.get("workday_start_hour", 8)
+    workday_end_hour = context.get("workday_end_hour", 19)
+    results = simulation.simulate(
+        base,
+        inputs.events,
+        inputs.tasks,
+        transit_shock_active=False,
+        num_simulations=num_simulations,
+        route_cache=inputs.route_cache,
+        weather_cache=inputs.weather_cache,
+        starting_location=starting_location,
+        preferred_transport_mode=preferred_transport_mode,
+        workday_start_hour=workday_start_hour,
+        workday_end_hour=workday_end_hour,
+    )
 
     probability_keys = (
         "meeting_failure_probabilities",
         "task_failure_probabilities",
         "task_unfinished_probabilities",
     )
-    blended = {
-        key: _blend_probabilities(
-            nominal.get(key, {}),
-            shocked.get(key, {}),
-            shock_probability,
-        )
+    probabilities = {
+        key: results.get(key, {})
         for key in probability_keys
     }
     risks_by_id = {
         "meetings": _map_risks_by_id(
-            blended["meeting_failure_probabilities"], inputs.meeting_ids
+            probabilities["meeting_failure_probabilities"], inputs.meeting_ids
         ),
         "tasks": _map_risks_by_id(
-            blended["task_failure_probabilities"], inputs.task_ids
+            probabilities["task_failure_probabilities"], inputs.task_ids
         ),
         "unfinished_tasks": _map_risks_by_id(
-            blended["task_unfinished_probabilities"], inputs.task_ids
+            probabilities["task_unfinished_probabilities"], inputs.task_ids
         ),
     }
+    task_diagnostics = _task_diagnostics(
+        plan,
+        inputs,
+        risks_by_id,
+        base,
+        workday_start_hour,
+        workday_end_hour,
+    )
 
     result: Prediction = {
-        "transit_shock_probability": shock_probability,
         "num_simulations_per_scenario": num_simulations,
-        "disruptions": [
-            disruption.model_dump(mode="json")
-            for disruption in chaos_report.disruptions
-        ],
         "risk_by_id": risks_by_id,
         "risk_by_name": _named_risks(risks_by_id, inputs),
+        "task_diagnostics": task_diagnostics,
         "limitations": [
-            "Travel estimates account for transit shocks, rain, and wind; other disruption details are not yet modeled.",
+            "Disruption forecasts and transit-shock scenarios are disabled; travel still uses the simulator's baseline delay and weather adjustments.",
             "Task start times affect task priority/order, not exact clock-time blocking.",
             "Event duration is sampled from a normal distribution centered on the scheduled duration, using std as its standard deviation and clamping samples at zero.",
+            "Task probabilities do not include per-run failure-cause attribution; task diagnostics are screening facts, not proof of which factor caused a simulated failure.",
         ],
     }
     for key in probability_keys:
-        result[key] = _map_risks_by_title(blended[key], inputs.display_names)
+        result[key] = _map_risks_by_title(probabilities[key], inputs.display_names)
     return result

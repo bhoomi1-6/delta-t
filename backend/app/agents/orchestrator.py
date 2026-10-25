@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.config import load_backend_environment
-from app.agents.chaos import AgentContext, ChaosReport
+from app.agents.chaos import AgentContext
 from app.agents.judge import compare_timelines
 from app.agents.intake import parse_plan
 from app.agents.predictor import predict_outcomes
@@ -21,11 +21,6 @@ from app.integrations.weather import get_oxford_weather_forecasts
 from app.steplog import logger, step
 from app.timeutil import day_bounds
 from google.oauth2.credentials import Credentials
-
-# The chaos agent is skipped for now. The predictor still takes a ChaosReport,
-# so give it an empty one: no disruptions and no transit-shock scenario.
-NO_CHAOS = ChaosReport(disruptions=[], transit_shock_probability=0.0, notes=[])
-
 
 @dataclass(frozen=True)
 class _ItineraryItem:
@@ -209,14 +204,12 @@ def review_plan(
         original_prediction = predict_outcomes(
             plan,
             agent_context,
-            NO_CHAOS,
         )
     logger.info("[predictor] risk by id: %s", original_prediction["risk_by_id"])
     with step("repair agent (Gemini)"):
         proposal = propose_repair(
             plan,
             agent_context,
-            NO_CHAOS.disruptions,
             original_prediction,
             plan_day,
         )
@@ -225,7 +218,6 @@ def review_plan(
         repaired_prediction = predict_outcomes(
             proposal.proposed_plan,
             agent_context,
-            NO_CHAOS,
             task_schedule=proposal.proposed_task_schedule,
         )
     logger.info("[predictor] risk by id: %s", repaired_prediction["risk_by_id"])

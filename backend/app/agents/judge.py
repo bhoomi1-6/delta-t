@@ -106,10 +106,12 @@ def compare_timelines(
         raise RuntimeError("GEMINI_API_KEY is not set.")
     original_named = {
         "risks": _named_risks(original),
+        "task_diagnostics": original.get("task_diagnostics", []),
         "limitations": original.get("limitations", []),
     }
     repaired_named = {
         "risks": _named_risks(repaired),
+        "task_diagnostics": repaired.get("task_diagnostics", []),
         "limitations": repaired.get("limitations", []),
     }
     prompt = f"""
@@ -121,6 +123,12 @@ not contradict it. Explain the most important per-event and per-task changes,
 using the supplied event/task names exactly. Never mention, infer, or output
 internal IDs. If there is no measured improvement, say that plainly and do not
 invent a successful fix. Distinguish modeled risk from real-world certainty.
+For a task explanation, use its measured probability and any matching
+task_diagnostics. Report a listed constraint as evidence that may explain the
+risk, not as a recorded per-run cause. If no specific constraint is listed,
+say the simulation reports the probability but does not identify its cause.
+Compare original and repaired diagnostics when explaining why a task's risk
+changed. Task start times are priority/order hints, not reserved time blocks.
 Avoid repeating the same warning; keep remaining_risks concise and actionable.
 Do not describe a suggestion as conflict-free or guaranteed unless the inputs
 explicitly verify it.

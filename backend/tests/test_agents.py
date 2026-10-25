@@ -1,83 +1,23 @@
 from datetime import datetime
 
-import pytest
-
 from app.agents import predictor
 from app.agents import repair
-from app.agents.chaos import AgentContext, ChaosReport, TaskScheduleItem
+from app.agents.chaos import AgentContext, TaskScheduleItem
 from app.agents import judge
 from app.agents.judge import _average_failure_risk
 from app.agents.repair import RepairProposal
 from app.agents.schemas import Plan, PlanTask
-from app.models import Disruption, Event, EventKind
+from app.models import Event, EventKind
 
 
-def test_predictor_weights_nominal_and_transit_shock_runs(monkeypatch) -> None:
-    results = iter(
-        [
-            {
-                "meeting_failure_probabilities": {"Lecture": 10.0},
-                "task_failure_probabilities": {"Report": 20.0},
-                "task_unfinished_probabilities": {},
-            },
-            {
-                "meeting_failure_probabilities": {"Lecture": 50.0},
-                "task_failure_probabilities": {"Report": 80.0},
-                "task_unfinished_probabilities": {},
-            },
-        ]
-    )
-    calls: list[bool] = []
-
-    def fake_simulate(*args, transit_shock_active: bool, **kwargs):
-        calls.append(transit_shock_active)
-        return next(results)
-
-    monkeypatch.setattr(predictor.simulation, "simulate", fake_simulate)
-    chaos = ChaosReport(
-        disruptions=[
-            Disruption(
-                id="delay",
-                title="Transit delay",
-                probability=0.25,
-                time_wasted=10,
-                predicted_cost=1,
-            )
-        ],
-        transit_shock_probability=0.25,
-        notes=[],
-    )
-
-    outcome = predictor.predict_outcomes(
-        Plan(events=[], tasks=[]),
-        [],
-        [],
-        chaos,
-        datetime(2026, 10, 25),
-    )
-
-    assert calls == [False, True]
-    assert outcome["meeting_failure_probabilities"]["Lecture"] == 20.0
-    assert outcome["task_failure_probabilities"]["Report"] == 35.0
-    assert len(outcome["limitations"]) == 3
-
-
-@pytest.mark.parametrize(
-    ("shock_probability", "expected_calls"),
-    [(0.0, [False]), (1.0, [True])],
-)
-def test_predictor_skips_unneeded_transit_scenario(
-    monkeypatch,
-    shock_probability: float,
-    expected_calls: list[bool],
-) -> None:
+def test_predictor_runs_without_chaos_agent(monkeypatch) -> None:
     calls: list[bool] = []
 
     def fake_simulate(*args, transit_shock_active: bool, **kwargs):
         calls.append(transit_shock_active)
         return {
-            "meeting_failure_probabilities": {},
-            "task_failure_probabilities": {},
+            "meeting_failure_probabilities": {"event:meeting-1": 10.0},
+            "task_failure_probabilities": {"task:task-1": 20.0},
             "task_unfinished_probabilities": {},
         }
 
@@ -88,15 +28,16 @@ def test_predictor_skips_unneeded_transit_scenario(
         "starting_location": "Home",
         "day_start": datetime(2026, 10, 25),
     }
-    chaos = ChaosReport(
-        disruptions=[],
-        transit_shock_probability=shock_probability,
-        notes=[],
+    outcome = predictor.predict_outcomes(
+        Plan(events=[], tasks=[]),
+        context,
     )
 
-    predictor.predict_outcomes(Plan(events=[], tasks=[]), context, chaos)
-
-    assert calls == expected_calls
+    assert calls == [False]
+    assert outcome["meeting_failure_probabilities"]["event:meeting-1"] == 10.0
+    assert outcome["task_failure_probabilities"]["task:task-1"] == 20.0
+    assert len(outcome["limitations"]) == 4
+    assert "Disruption forecasts and transit-shock scenarios are disabled" in outcome["limitations"][0]
 
 
 def test_predictor_sorts_events_by_model_start_time() -> None:
@@ -150,6 +91,64 @@ def test_predictor_sorts_events_by_model_start_time() -> None:
 
     assert {risk["name"] for risk in named_risks} == {"Earlier", "Later"}
     assert all("id" not in risk for risk in named_risks)
+
+
+def test_predictor_reports_task_capacity_constraints_without_ids(monkeypatch) -> None:
+    monkeypatch.setattr(
+        predictor.simulation,
+        "simulate",
+        lambda *args, **kwargs: {
+            "meeting_failure_probabilities": {},
+            "task_failure_probabilities": {"task:task-1": 100.0},
+            "task_unfinished_probabilities": {"task:task-1": 0.0},
+        },
+    )
+    plan = Plan(
+        events=[
+            Event(
+                id="event-1",
+                title="Lecture",
+                kind=EventKind.fixed,
+                std=0,
+                start_time=datetime(2026, 10, 25, 10),
+                end_time=datetime(2026, 10, 25, 12),
+            )
+        ],
+        tasks=[
+            PlanTask(
+                id="task-1",
+                title="Write report",
+                estimated_length=180,
+                completion_pct=0,
+                can_be_divided=False,
+                deadline=datetime(2026, 10, 25, 12),
+                priority=1,
+            )
+        ],
+    )
+    context: AgentContext = {
+        "calendar_commitments": [],
+        "conditions": [],
+        "starting_location": "Home",
+        "day_start": datetime(2026, 10, 25),
+        "workday_start_hour": 8,
+        "workday_end_hour": 19,
+    }
+
+    outcome = predictor.predict_outcomes(
+        plan,
+        context,
+        num_simulations=1,
+    )
+
+    [diagnostic] = outcome["task_diagnostics"]
+    assert diagnostic["name"] == "Write report"
+    assert diagnostic["failure_probability_percent"] == 100.0
+    assert diagnostic["remaining_effort_minutes"] == 180.0
+    assert diagnostic["available_work_minutes_before_deadline"] == 120.0
+    assert diagnostic["longest_uninterrupted_work_window_minutes"] == 120.0
+    assert len(diagnostic["potential_constraints"]) == 2
+    assert "task-1" not in str(diagnostic)
 
 
 def test_repair_retries_proposal_with_mismatched_event_ids(
@@ -224,18 +223,24 @@ def test_repair_retries_proposal_with_mismatched_event_ids(
         "conditions": [],
         "starting_location": "Home",
         "day_start": datetime(2026, 10, 25),
+        "preferred_transport_mode": "transit",
+        "workday_start_hour": 7,
+        "workday_end_hour": 21,
     }
 
     result = repair.propose_repair(
         original_plan,
         context,
-        disruptions=[],
         prediction={},
         plan_day="2026-10-25",
     )
 
     assert len(prompts) == 2
     assert '"meeting-1"' in prompts[0]
+    assert "Starting location: Home" in prompts[0]
+    assert "Preferred transport: transit" in prompts[0]
+    assert "Workday: 07:00 to 21:00 local time" in prompts[0]
+    assert "per-run causal attribution" in prompts[0]
     assert "previous proposal was rejected" in prompts[1]
     assert result.proposed_plan.events[0].id == "meeting-1"
 
@@ -301,10 +306,19 @@ def test_judge_prompt_uses_event_names_not_internal_ids(monkeypatch) -> None:
                 "failure_probability_percent": 25.0,
             }
         ],
+        "task_diagnostics": [
+            {
+                "name": "Write report",
+                "failure_probability_percent": 80.0,
+                "potential_constraints": ["Limited work window before deadline."],
+            }
+        ],
         "limitations": [],
     }
 
     judge.compare_timelines(prediction, prediction, proposal)
 
     assert "Meet Alex" in prompts[0]
+    assert "Limited work window before deadline." in prompts[0]
+    assert "does not identify its cause" in prompts[0]
     assert "secret-event-id" not in prompts[0]
