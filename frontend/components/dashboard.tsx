@@ -929,7 +929,7 @@ export default function Dashboard({
               <div className="work-hours-setting">
                 <h3>Work hours</h3>
                 <p className="settings-help">
-                  Choose when the simulator can schedule tasks. The end time must be after the start time.
+                  Adjust each time independently. The end time must be after the start time.
                 </p>
                 <label htmlFor="workday-start">
                   <span>Start: <strong>{formatHour(workdayStartHour)}</strong></span>
@@ -937,7 +937,7 @@ export default function Dashboard({
                     id="workday-start"
                     type="range"
                     min={0}
-                    max={workdayEndHour - 1}
+                    max={23}
                     step={1}
                     value={workdayStartHour}
                     onChange={(event) => setWorkdayStartHour(event.currentTarget.valueAsNumber)}
@@ -948,13 +948,18 @@ export default function Dashboard({
                   <input
                     id="workday-end"
                     type="range"
-                    min={workdayStartHour + 1}
+                    min={1}
                     max={24}
                     step={1}
                     value={workdayEndHour}
                     onChange={(event) => setWorkdayEndHour(event.currentTarget.valueAsNumber)}
                   />
                 </label>
+                {workdayEndHour <= workdayStartHour && (
+                  <p className="work-hours-error" role="alert">
+                    End time must be later than start time.
+                  </p>
+                )}
               </div>
             </div>
           </section>
