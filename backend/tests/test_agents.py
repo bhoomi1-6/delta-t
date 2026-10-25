@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from app.agents import predictor
 from app.agents import repair
 from app.agents.chaos import AgentContext, ChaosReport, TaskScheduleItem
@@ -58,6 +60,43 @@ def test_predictor_weights_nominal_and_transit_shock_runs(monkeypatch) -> None:
     assert outcome["meeting_failure_probabilities"]["Lecture"] == 20.0
     assert outcome["task_failure_probabilities"]["Report"] == 35.0
     assert len(outcome["limitations"]) == 3
+
+
+@pytest.mark.parametrize(
+    ("shock_probability", "expected_calls"),
+    [(0.0, [False]), (1.0, [True])],
+)
+def test_predictor_skips_unneeded_transit_scenario(
+    monkeypatch,
+    shock_probability: float,
+    expected_calls: list[bool],
+) -> None:
+    calls: list[bool] = []
+
+    def fake_simulate(*args, transit_shock_active: bool, **kwargs):
+        calls.append(transit_shock_active)
+        return {
+            "meeting_failure_probabilities": {},
+            "task_failure_probabilities": {},
+            "task_unfinished_probabilities": {},
+        }
+
+    monkeypatch.setattr(predictor.simulation, "simulate", fake_simulate)
+    context: AgentContext = {
+        "calendar_commitments": [],
+        "conditions": [],
+        "starting_location": "Home",
+        "day_start": datetime(2026, 10, 25),
+    }
+    chaos = ChaosReport(
+        disruptions=[],
+        transit_shock_probability=shock_probability,
+        notes=[],
+    )
+
+    predictor.predict_outcomes(Plan(events=[], tasks=[]), context, chaos)
+
+    assert calls == expected_calls
 
 
 def test_predictor_sorts_events_by_model_start_time() -> None:

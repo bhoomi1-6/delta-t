@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from app.agents.chaos import AgentContext, ChaosReport, Prediction, TaskScheduleItem
 from app.agents.schemas import Plan
@@ -17,7 +18,7 @@ class _SimulationInputs:
     events: list[Event]
     tasks: list[Task]
     route_cache: dict[str, dict[str, float]]
-    weather_cache: dict[str, float]
+    weather_cache: dict[str, dict[str, float]]
     meeting_ids: dict[str, str]
     task_ids: dict[str, str]
     display_names: dict[str, str]
@@ -125,7 +126,7 @@ def _simulation_inputs(
         )
 
     route_cache: dict[str, dict[str, float]] = {}
-    weather_cache: dict[str, float] = {}
+    weather_cache: dict[str, dict[str, float]] = {}
     for item in context["conditions"]:
         origin = item.get("origin")
         destination = item.get("destination")
@@ -133,14 +134,14 @@ def _simulation_inputs(
         if origin and destination and routes:
             route_cache[f"{origin}_to_{destination}"] = routes
 
-        probability = item.get("weather", {}).get("precipitation_probability")
-        if probability is not None:
-            prefix = (
-                "calendar"
-                if item["source"] == "google_calendar"
-                else "event"
-            )
-            weather_cache[f"{prefix}:{item['event_id']}"] = probability / 100.0
+        weather = item.get("weather", {})
+        prefix = "calendar" if item["source"] == "google_calendar" else "event"
+        weather_cache[f"{prefix}:{item['event_id']}"] = {
+            "precipitation_probability": (
+                weather.get("precipitation_probability", 0.0) / 100.0
+            ),
+            "wind_speed_kmh": weather.get("wind_speed_kmh", 0.0),
+        }
 
     return _SimulationInputs(
         events=events,
@@ -216,7 +217,7 @@ def predict_outcomes(
     chaos: ChaosReport | list[dict[str, object]],
     *legacy_args: object,
     task_schedule: list[TaskScheduleItem] | None = None,
-    num_simulations: int = 500,
+    num_simulations: int = 5000,
 ) -> Prediction:
     """Estimate risks and return canonical probabilities keyed by stable IDs.
 
@@ -249,28 +250,38 @@ def predict_outcomes(
     starting_location = (
         shared_context["starting_location"] or simulation.DEFAULT_STARTING_LOCATION
     )
-    nominal = simulation.simulate(
-        base,
-        inputs.events,
-        inputs.tasks,
-        transit_shock_active=False,
-        num_simulations=num_simulations,
-        route_cache=inputs.route_cache,
-        weather_cache=inputs.weather_cache,
-        starting_location=starting_location,
+    preferred_transport_mode = shared_context.get(
+        "preferred_transport_mode", "fastest"
     )
-    shocked = simulation.simulate(
-        base,
-        inputs.events,
-        inputs.tasks,
-        transit_shock_active=True,
-        num_simulations=num_simulations,
-        route_cache=inputs.route_cache,
-        weather_cache=inputs.weather_cache,
-        starting_location=starting_location,
-    )
-
+    workday_start_hour = shared_context.get("workday_start_hour", 8)
+    workday_end_hour = shared_context.get("workday_end_hour", 19)
     shock_probability = chaos_report.transit_shock_probability
+
+    def run_simulation(transit_shock_active: bool) -> dict[str, Any]:
+        return simulation.simulate(
+            base,
+            inputs.events,
+            inputs.tasks,
+            transit_shock_active=transit_shock_active,
+            num_simulations=num_simulations,
+            route_cache=inputs.route_cache,
+            weather_cache=inputs.weather_cache,
+            starting_location=starting_location,
+            preferred_transport_mode=preferred_transport_mode,
+            workday_start_hour=workday_start_hour,
+            workday_end_hour=workday_end_hour,
+        )
+
+    if shock_probability == 0.0:
+        nominal = run_simulation(transit_shock_active=False)
+        shocked = nominal
+    elif shock_probability == 1.0:
+        shocked = run_simulation(transit_shock_active=True)
+        nominal = shocked
+    else:
+        nominal = run_simulation(transit_shock_active=False)
+        shocked = run_simulation(transit_shock_active=True)
+
     probability_keys = (
         "meeting_failure_probabilities",
         "task_failure_probabilities",
@@ -306,9 +317,9 @@ def predict_outcomes(
         "risk_by_id": risks_by_id,
         "risk_by_name": _named_risks(risks_by_id, inputs),
         "limitations": [
-            "Only transit shocks and rain-adjusted travel affect simulation outcomes; other disruption details are not yet modeled.",
+            "Travel estimates account for transit shocks, rain, and wind; other disruption details are not yet modeled.",
             "Task start times affect task priority/order, not exact clock-time blocking.",
-            "Event durations use their most-likely (mode) value; duration uncertainty is not sampled.",
+            "Event duration is sampled from a normal distribution centered on the scheduled duration, using std as its standard deviation and clamping samples at zero.",
         ],
     }
     for key in probability_keys:

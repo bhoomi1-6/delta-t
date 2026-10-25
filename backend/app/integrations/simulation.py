@@ -3,12 +3,14 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Any
 from collections import Counter
+from typing import Literal
 from ..models import Event, Task
 
 WORKDAY_START = time(hour=8)
 WORKDAY_CUTOFF = time(hour=19)
 SIMULATION_HORIZON = timedelta(days=7)
 DEFAULT_STARTING_LOCATION = "St. Catherine's College"
+TransportMode = Literal["fastest", "walking", "transit", "cycling"]
 
 # Data Structures
 
@@ -18,6 +20,7 @@ class _ActiveTask:
     remaining_mins: float
     deadline: datetime
     priority: int
+    can_be_divided: bool
 
 
 def _work_on_tasks(
@@ -36,6 +39,21 @@ def _work_on_tasks(
         task_work_until = min(work_until, task.deadline)
         available_mins = (task_work_until - current_time).total_seconds() / 60
         if available_mins <= 0:
+            continue
+
+        if not task.can_be_divided:
+            if available_mins < task.remaining_mins:
+                continue
+
+            distraction_penalty = (
+                np.random.uniform(10, 30) if np.random.rand() < 0.3 else 0.0
+            )
+            required_mins = task.remaining_mins + distraction_penalty
+            if available_mins < required_mins:
+                continue
+
+            current_time += timedelta(minutes=required_mins)
+            task.remaining_mins = 0.0
             continue
 
         time_allocated = min(available_mins, task.remaining_mins)
@@ -60,8 +78,11 @@ def simulate(
     transit_shock_active: bool,
     num_simulations: int = 1000,
     route_cache: dict[str, dict[str, float]] | None = None,
-    weather_cache: dict[str, float] | None = None,
+    weather_cache: dict[str, float | dict[str, float]] | None = None,
     starting_location: str = DEFAULT_STARTING_LOCATION,
+    preferred_transport_mode: TransportMode = "fastest",
+    workday_start_hour: int = WORKDAY_START.hour,
+    workday_end_hour: int = WORKDAY_CUTOFF.hour,
 ) -> dict[str, Any]:
 
     meeting_failures = Counter()
@@ -70,6 +91,12 @@ def simulate(
 
     if not isinstance(simulation_base_date, datetime):
         raise TypeError("simulation_base_date must be a datetime")
+    if not 0 <= workday_start_hour < 24:
+        raise ValueError("workday_start_hour must be between 0 and 23")
+    if not 1 <= workday_end_hour <= 24:
+        raise ValueError("workday_end_hour must be between 1 and 24")
+    if workday_end_hour <= workday_start_hour:
+        raise ValueError("workday_end_hour must be after workday_start_hour")
 
     all_datetimes = [simulation_base_date]
     for event in events:
@@ -127,6 +154,7 @@ def simulate(
                     remaining_mins=rem_work,
                     deadline=t.deadline,
                     priority=t.priority,
+                    can_be_divided=t.can_be_divided,
                 )
             )
 
@@ -137,12 +165,16 @@ def simulate(
         current_time = simulation_base_date
         while current_date <= last_simulation_date:
             day_start = datetime.combine(
-                current_date, WORKDAY_START, tzinfo=simulation_base_date.tzinfo
+                current_date,
+                time(hour=workday_start_hour),
+                tzinfo=simulation_base_date.tzinfo,
             )
+            cutoff_date = current_date + timedelta(days=1) if workday_end_hour == 24 else current_date
+            cutoff_time = time(0) if workday_end_hour == 24 else time(hour=workday_end_hour)
             day_cutoff = min(
                 datetime.combine(
-                    current_date,
-                    WORKDAY_CUTOFF,
+                    cutoff_date,
+                    cutoff_time,
                     tzinfo=simulation_base_date.tzinfo,
                 ),
                 simulation_end,
@@ -164,14 +196,49 @@ def simulate(
                     if "transit" in route_data:
                         route_data["transit"] += transit_delay_samples[run]
 
-                    is_raining = np.random.rand() < weather_cache.get(event.title, 0.0)
+                    event_weather = weather_cache.get(event.title, 0.0)
+                    if isinstance(event_weather, dict):
+                        rain_probability = event_weather.get(
+                            "precipitation_probability", 0.0
+                        )
+                        wind_speed_kmh = max(
+                            0.0, event_weather.get("wind_speed_kmh", 0.0)
+                        )
+                    else:
+                        rain_probability = event_weather
+                        wind_speed_kmh = 0.0
+
+                    is_raining = np.random.rand() < rain_probability
                     if is_raining:
                         route_data["walking"] *= 1.1
                         route_data["cycling"] *= 1.5
 
-                    total_commute_time = route_data[
-                        min(route_data, key=route_data.get)
-                    ]
+                    wind_exposure = min(max(wind_speed_kmh - 15.0, 0.0) / 45.0, 1.0)
+                    route_data["walking"] *= 1.0 + (0.15 * wind_exposure)
+                    route_data["cycling"] *= 1.0 + (0.5 * wind_exposure)
+                    route_variability = {
+                        "walking": 0.1 * wind_exposure,
+                        "cycling": 0.25 * wind_exposure,
+                    }
+                    sampled_routes = {
+                        mode: max(
+                            0.0,
+                            float(
+                                np.random.normal(
+                                    duration,
+                                    duration * route_variability.get(mode, 0.0),
+                                )
+                            ),
+                        )
+                        for mode, duration in route_data.items()
+                    }
+                    selected_mode = (
+                        preferred_transport_mode
+                        if preferred_transport_mode != "fastest"
+                        and preferred_transport_mode in sampled_routes
+                        else min(sampled_routes, key=sampled_routes.get)
+                    )
+                    total_commute_time = sampled_routes[selected_mode]
                 else:
                     total_commute_time = 0.0
 
@@ -236,46 +303,3 @@ def simulate(
             for title, count in task_unfinished.items()
         },
     }
-
-# --- TEST EXECUTION ---
-if __name__ == "__main__":
-    simulation_base_date = datetime(2026, 10, 24, 8)
-    mock_events = [
-        Event(
-            id="morning-lecture",
-            title="Morning Lecture",
-            kind="fixed",
-            start_time=simulation_base_date.replace(hour=9),
-            end_time=simulation_base_date.replace(hour=10),
-            std=5,
-            location="Lecture Hall",
-        ),
-        Event(
-            id="afternoon-supervision",
-            title="Afternoon Supervision",
-            kind="fixed",
-            start_time=simulation_base_date.replace(hour=12),
-            end_time=simulation_base_date.replace(hour=13),
-            std=5,
-            location="College",
-        ),
-    ]
-    mock_tasks = [
-        Task(
-            id="problem-sheet-3",
-            title="Problem Sheet 3",
-            estimated_length=90,
-            completion_pct=10.0,
-            deadline=simulation_base_date.replace(hour=15),
-            priority=0,
-        )
-    ]
-
-    results = simulate(
-        simulation_base_date,
-        mock_events,
-        mock_tasks,
-        transit_shock_active=True,
-        num_simulations=1000,
-    )
-    print("=== DELTA-T SIMULATION RESULTS ===", results)

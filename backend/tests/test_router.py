@@ -47,3 +47,28 @@ def test_route_durations_without_api_key_include_cycling(
         "transit": 10.0,
         "cycling": 12.0,
     }
+
+
+def test_route_durations_are_cached_for_repeated_itinerary_legs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router._ROUTE_CACHE.clear()
+    calls: list[tuple[str, str, datetime | None]] = []
+
+    def fetch(
+        origin: str,
+        destination: str,
+        target_arrival_time: datetime | None,
+    ) -> dict[str, float]:
+        calls.append((origin, destination, target_arrival_time))
+        return {"walking": 10.0, "transit": 15.0, "cycling": 8.0}
+
+    monkeypatch.setattr(router, "_fetch_route_durations_by_arrival", fetch)
+    arrival = datetime(2026, 10, 25, 10)
+
+    first = router.get_route_durations_by_arrival("Home", "Work", arrival)
+    second = router.get_route_durations_by_arrival("Home", "Work", arrival)
+    first["walking"] = 999.0
+
+    assert len(calls) == 1
+    assert second["walking"] == 10.0

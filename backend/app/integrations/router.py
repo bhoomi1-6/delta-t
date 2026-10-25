@@ -1,14 +1,25 @@
 import os
 import requests
+from threading import Lock
+from time import monotonic
 from typing import Dict
 from datetime import datetime, timezone
 
 from app.steplog import logger
 
 DEFAULT_ROUTE_DURATIONS = {"walking": 15.0, "transit": 10.0, "cycling": 12.0}
+ROUTE_CACHE_TTL_SECONDS = 15 * 60
+_ROUTE_CACHE: dict[
+    tuple[str, str, str | None], tuple[float, Dict[str, float]]
+] = {}
+_ROUTE_CACHE_LOCK = Lock()
 
 
-def get_route_durations_by_arrival(origin: str, destination: str, target_arrival_time: datetime = None) -> Dict[str, float]:
+def _fetch_route_durations_by_arrival(
+    origin: str,
+    destination: str,
+    target_arrival_time: datetime | None,
+) -> Dict[str, float]:
     """
     Queries Google's Routes API (v2) for walking, transit, and cycling options.
     """
@@ -77,4 +88,30 @@ def get_route_durations_by_arrival(origin: str, destination: str, target_arrival
             )
             routes[mode_name] = DEFAULT_ROUTE_DURATIONS[mode_name]
 
+    return routes
+
+
+def get_route_durations_by_arrival(
+    origin: str,
+    destination: str,
+    target_arrival_time: datetime | None = None,
+) -> Dict[str, float]:
+    """Return cached route estimates for repeated itinerary legs."""
+    arrival_key = (
+        target_arrival_time.isoformat() if target_arrival_time is not None else None
+    )
+    key = (origin.strip().casefold(), destination.strip().casefold(), arrival_key)
+    now = monotonic()
+    with _ROUTE_CACHE_LOCK:
+        cached = _ROUTE_CACHE.get(key)
+        if cached and cached[0] > now:
+            return cached[1].copy()
+
+    routes = _fetch_route_durations_by_arrival(
+        origin,
+        destination,
+        target_arrival_time,
+    )
+    with _ROUTE_CACHE_LOCK:
+        _ROUTE_CACHE[key] = (now + ROUTE_CACHE_TTL_SECONDS, routes.copy())
     return routes

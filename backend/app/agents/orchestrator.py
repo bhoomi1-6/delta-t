@@ -17,7 +17,7 @@ from app.agents.repair import propose_repair
 from app.agents.schemas import Plan
 from app.integrations.google_calendar import get_busy_events
 from app.integrations.router import get_route_durations_by_arrival
-from app.integrations.weather import get_oxford_weather_forecast
+from app.integrations.weather import get_oxford_weather_forecasts
 from app.steplog import logger, step
 from app.timeutil import day_bounds
 from google.oauth2.credentials import Credentials
@@ -93,15 +93,18 @@ def _collect_context(
 
     itinerary.sort(key=lambda item: item.start)
 
+    weather_times = [
+        item.start.astimezone(timezone.utc).replace(tzinfo=None)
+        for item in itinerary
+    ]
+    with step(f"weather batch ({len(weather_times)} event(s))"):
+        weather_forecasts = get_oxford_weather_forecasts(weather_times)
     conditions: list[dict[str, object]] = []
     origin = starting_location
-    for item in itinerary:
+    route_results: dict[tuple[str, str, str], dict[str, float]] = {}
+    for item, weather in zip(itinerary, weather_forecasts):
         start = item.start
         location = item.location
-        with step(f"weather {item.title} {start:%H:%M}"):
-            weather = get_oxford_weather_forecast(
-                start.astimezone(timezone.utc).replace(tzinfo=None)
-            )
         logger.info("[weather] %s -> %s", item.title, weather)
         condition: dict[str, object] = {
             "event_id": item.event_id,
@@ -114,12 +117,19 @@ def _collect_context(
         if isinstance(location, str) and location.strip():
             condition["origin"] = origin
             condition["destination"] = location
-            with step(f"routes {origin} -> {location}"):
-                condition["route_minutes"] = get_route_durations_by_arrival(
-                    origin,
-                    location,
-                    start.astimezone(timezone.utc).replace(tzinfo=None),
-                )
+            route_key = (
+                origin.strip().casefold(),
+                location.strip().casefold(),
+                start.replace(minute=0, second=0, microsecond=0).isoformat(),
+            )
+            if route_key not in route_results:
+                with step(f"routes {origin} -> {location}"):
+                    route_results[route_key] = get_route_durations_by_arrival(
+                        origin,
+                        location,
+                        start.astimezone(timezone.utc).replace(tzinfo=None),
+                    )
+            condition["route_minutes"] = route_results[route_key]
             logger.info(
                 "[routes] %s -> %s: %s", origin, location, condition["route_minutes"]
             )
@@ -162,6 +172,9 @@ def review_plan(
     calendar_id: str | None = None,
     now: datetime | None = None,
     credentials: Credentials | None = None,
+    preferred_transport_mode: str = "fastest",
+    workday_start_hour: int = 8,
+    workday_end_hour: int = 19,
 ) -> dict[str, object]:
     """Run the predictor, repair, and judge agents on an existing plan."""
     _check_ready(starting_location)
@@ -187,6 +200,9 @@ def review_plan(
         "conditions": conditions,
         "starting_location": starting_location,
         "day_start": day_start,
+        "preferred_transport_mode": preferred_transport_mode,
+        "workday_start_hour": workday_start_hour,
+        "workday_end_hour": workday_end_hour,
     }
 
     with step("predictor (original plan)"):
@@ -228,8 +244,9 @@ def review_plan(
         "repaired_prediction": repaired_prediction,
         "judge": judgment,
         "assumptions": [
-            "All times are minutes since midnight (Europe/London) on tomorrow's date; the simulated day is always the next calendar day, midnight to midnight.",
+            "Times are minutes since midnight (Europe/London) on tomorrow's date; tasks can be scheduled only during the configured work hours.",
             "Weather and route estimates use Oxford, UK.",
+            "Wind can increase walking and cycling travel times and variability.",
             "Weather and route integrations may return fallback estimates if their data sources fail.",
             "The simulator currently models transit shocks and rain-adjusted travel; other generated disruption fields are informational only.",
         ],
