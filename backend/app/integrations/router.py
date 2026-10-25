@@ -3,6 +3,8 @@ import requests
 from typing import Dict
 from datetime import datetime, timezone
 
+from app.steplog import logger
+
 DEFAULT_ROUTE_DURATIONS = {"walking": 15.0, "transit": 10.0, "cycling": 12.0}
 
 
@@ -12,6 +14,10 @@ def get_route_durations_by_arrival(origin: str, destination: str, target_arrival
     """
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
+        logger.warning(
+            "[routes] GOOGLE_MAPS_API_KEY is not set: using FALLBACK durations %s",
+            DEFAULT_ROUTE_DURATIONS,
+        )
         return DEFAULT_ROUTE_DURATIONS.copy()
 
     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
@@ -53,9 +59,22 @@ def get_route_durations_by_arrival(origin: str, destination: str, target_arrival
                 duration_str = data["routes"][0].get("duration", "900s")
                 routes[mode_name] = float(duration_str.rstrip("s")) / 60.0
             else:
+                logger.warning(
+                    "[routes] %s lookup returned HTTP %s (%s): using fallback %.0f min",
+                    mode_name,
+                    response.status_code,
+                    data.get("error", {}).get("message", "no routes found"),
+                    DEFAULT_ROUTE_DURATIONS[mode_name],
+                )
                 routes[mode_name] = DEFAULT_ROUTE_DURATIONS[mode_name]
-                
+
         except Exception as e:
+            logger.warning(
+                "[routes] %s lookup failed (%s): using fallback %.0f min",
+                mode_name,
+                e,
+                DEFAULT_ROUTE_DURATIONS[mode_name],
+            )
             routes[mode_name] = DEFAULT_ROUTE_DURATIONS[mode_name]
 
     return routes

@@ -222,6 +222,9 @@ def predict_outcomes(
     day_start = shared_context["day_start"]
     inputs = _simulation_inputs(plan, shared_context, task_schedule, day_start)
     base = day_start.astimezone(LOCAL_TIMEZONE).replace(tzinfo=None)
+    starting_location = (
+        shared_context["starting_location"] or simulation.DEFAULT_STARTING_LOCATION
+    )
     nominal = simulation.simulate(
         base,
         inputs.events,
@@ -230,6 +233,7 @@ def predict_outcomes(
         num_simulations=num_simulations,
         route_cache=inputs.route_cache,
         weather_cache=inputs.weather_cache,
+        starting_location=starting_location,
     )
     shocked = simulation.simulate(
         base,
@@ -239,6 +243,7 @@ def predict_outcomes(
         num_simulations=num_simulations,
         route_cache=inputs.route_cache,
         weather_cache=inputs.weather_cache,
+        starting_location=starting_location,
     )
 
     shock_probability = chaos_report.transit_shock_probability

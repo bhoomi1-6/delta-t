@@ -1,6 +1,8 @@
 import requests
 from datetime import datetime
 
+from app.steplog import logger
+
 def get_oxford_weather_forecast(target_datetime: datetime) -> dict:
     """
     Fetches hourly weather and precipitation probability for Oxford 
@@ -34,9 +36,13 @@ def get_oxford_weather_forecast(target_datetime: datetime) -> dict:
                     "precipitation_probability": prob_list[idx],  # e.g., 70.0 (%)
                     "precipitation_mm": precip_list[idx]          # e.g., 1.2 (mm)
                 }
+            logger.warning(
+                "[weather] %s is outside the Open-Meteo forecast window: using FALLBACK (no rain)",
+                target_str,
+            )
     except Exception as e:
-        print(f"Weather API fetch failed: {e}")
-        
+        logger.warning("[weather] Open-Meteo fetch failed (%s): using FALLBACK (no rain)", e)
+
     # Default fallback if offline or out of bounds
     return {"precipitation_probability": 0.0, "precipitation_mm": 0.0}
 

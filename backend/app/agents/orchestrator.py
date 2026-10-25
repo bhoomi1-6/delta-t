@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.config import load_backend_environment
-from app.agents.chaos import AgentContext, generate_disruptions
+from app.agents.chaos import AgentContext, ChaosReport
 from app.agents.judge import compare_timelines
 from app.agents.intake import parse_plan
 from app.agents.predictor import predict_outcomes
@@ -18,7 +18,13 @@ from app.agents.schemas import Plan
 from app.integrations.google_calendar import get_busy_events
 from app.integrations.router import get_route_durations_by_arrival
 from app.integrations.weather import get_oxford_weather_forecast
+from app.steplog import logger, step
 from app.timeutil import day_bounds
+
+# The chaos agent is skipped for now. The predictor still takes a ChaosReport,
+# so give it an empty one: no disruptions and no transit-shock scenario.
+NO_CHAOS = ChaosReport(disruptions=[], transit_shock_probability=0.0, notes=[])
+
 
 @dataclass(frozen=True)
 class _ItineraryItem:
@@ -38,7 +44,13 @@ def _collect_context(
     # The simulated day is tomorrow, midnight to midnight; times in the plan
     # are minutes since that day's midnight.
     day_start, end = day_bounds(now=now)
-    busy_events = get_busy_events(day_start, end, calendar_id)
+    with step(f"calendar {day_start.date()}"):
+        busy_events = get_busy_events(day_start, end, calendar_id)
+    logger.info(
+        "[calendar] %d event(s): %s",
+        len(busy_events),
+        ", ".join(f"{e.summary} @ {e.start:%H:%M}" for e in busy_events) or "none",
+    )
 
     calendar_context: list[dict[str, object]] = []
     itinerary: list[_ItineraryItem] = []
@@ -84,38 +96,41 @@ def _collect_context(
     for item in itinerary:
         start = item.start
         location = item.location
+        with step(f"weather {item.title} {start:%H:%M}"):
+            weather = get_oxford_weather_forecast(
+                start.astimezone(timezone.utc).replace(tzinfo=None)
+            )
+        logger.info("[weather] %s -> %s", item.title, weather)
         condition: dict[str, object] = {
             "event_id": item.event_id,
             "title": item.title,
             "start": start.isoformat(),
             "source": item.source,
             "weather_location": "Oxford, UK",
-            "weather": get_oxford_weather_forecast(
-                start.astimezone(timezone.utc).replace(tzinfo=None)
-            ),
+            "weather": weather,
         }
         if isinstance(location, str) and location.strip():
             condition["origin"] = origin
             condition["destination"] = location
-            condition["route_minutes"] = get_route_durations_by_arrival(
-                origin,
-                location,
-                start.astimezone(timezone.utc).replace(tzinfo=None),
+            with step(f"routes {origin} -> {location}"):
+                condition["route_minutes"] = get_route_durations_by_arrival(
+                    origin,
+                    location,
+                    start.astimezone(timezone.utc).replace(tzinfo=None),
+                )
+            logger.info(
+                "[routes] %s -> %s: %s", origin, location, condition["route_minutes"]
             )
             origin = location
         else:
             condition["route_note"] = "No destination location was provided."
+            logger.info("[routes] %s has no location, skipping route lookup", item.title)
         conditions.append(condition)
 
     return calendar_context, conditions
 
 
-def review_day(
-    description: str,
-    starting_location: str,
-    calendar_id: str | None = None,
-) -> dict[str, object]:
-    """Return a proposed revision without writing to Google Calendar."""
+def _check_ready(starting_location: str) -> None:
     if not starting_location.strip():
         raise ValueError("Starting location cannot be empty.")
 
@@ -124,9 +139,38 @@ def review_day(
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is not set.")
 
+
+def review_day(
+    description: str,
+    starting_location: str,
+    calendar_id: str | None = None,
+) -> dict[str, object]:
+    """Return a proposed revision without writing to Google Calendar."""
+    _check_ready(starting_location)
+
     now = datetime.now(timezone.utc)
     day_start = day_bounds(now=now)[0]
     plan = parse_plan(description, plan_day=day_start.date())
+    return review_plan(plan, starting_location, calendar_id, now)
+
+
+def review_plan(
+    plan: Plan,
+    starting_location: str,
+    calendar_id: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Run the predictor, repair, and judge agents on an existing plan."""
+    _check_ready(starting_location)
+    logger.info(
+        "[workflow] %d task(s), %d plan event(s), starting from %r",
+        len(plan.tasks),
+        len(plan.events),
+        starting_location,
+    )
+
+    now = now or datetime.now(timezone.utc)
+    day_start = day_bounds(now=now)[0]
     plan_day = day_start.date().isoformat()
     calendar_context, conditions = _collect_context(
         plan,
@@ -141,34 +185,40 @@ def review_day(
         "day_start": day_start,
     }
 
-    chaos = generate_disruptions(plan, agent_context)
-    original_prediction = predict_outcomes(
-        plan,
-        agent_context,
-        chaos,
-    )
-    proposal = propose_repair(
-        plan,
-        agent_context,
-        chaos.disruptions,
-        original_prediction,
-        plan_day,
-    )
-    repaired_prediction = predict_outcomes(
-        proposal.proposed_plan,
-        agent_context,
-        chaos,
-        task_schedule=proposal.proposed_task_schedule,
-    )
-    judgment = compare_timelines(
-        original_prediction,
-        repaired_prediction,
-        proposal,
-    )
+    with step("predictor (original plan)"):
+        original_prediction = predict_outcomes(
+            plan,
+            agent_context,
+            NO_CHAOS,
+        )
+    logger.info("[predictor] risk by id: %s", original_prediction["risk_by_id"])
+    with step("repair agent (Gemini)"):
+        proposal = propose_repair(
+            plan,
+            agent_context,
+            NO_CHAOS.disruptions,
+            original_prediction,
+            plan_day,
+        )
+    logger.info("[repair] changes: %s", proposal.changes)
+    with step("predictor (repaired plan)"):
+        repaired_prediction = predict_outcomes(
+            proposal.proposed_plan,
+            agent_context,
+            NO_CHAOS,
+            task_schedule=proposal.proposed_task_schedule,
+        )
+    logger.info("[predictor] risk by id: %s", repaired_prediction["risk_by_id"])
+    with step("judge agent (Gemini)"):
+        judgment = compare_timelines(
+            original_prediction,
+            repaired_prediction,
+            proposal,
+        )
+    logger.info("[judge] verdict: %s", judgment["measured_verdict"])
     return {
         "calendar_commitments": calendar_context,
         "conditions": conditions,
-        "chaos": chaos.model_dump(mode="json"),
         "original_prediction": original_prediction,
         "repair": proposal.model_dump(mode="json"),
         "repaired_prediction": repaired_prediction,

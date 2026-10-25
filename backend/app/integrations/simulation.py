@@ -8,6 +8,7 @@ from ..models import Event, Task
 WORKDAY_START = time(hour=8)
 WORKDAY_CUTOFF = time(hour=19)
 SIMULATION_HORIZON = timedelta(days=7)
+DEFAULT_STARTING_LOCATION = "St. Catherine's College"
 
 # Data Structures
 
@@ -60,8 +61,9 @@ def simulate(
     num_simulations: int = 1000,
     route_cache: dict[str, dict[str, float]] | None = None,
     weather_cache: dict[str, float] | None = None,
+    starting_location: str = DEFAULT_STARTING_LOCATION,
 ) -> dict[str, Any]:
-    
+
     meeting_failures = Counter()
     task_failures = Counter()
     task_unfinished = Counter()
@@ -130,7 +132,7 @@ def simulate(
 
         active_tasks.sort(key=lambda task: task.priority)
 
-        current_location = "St. Catherine's College"
+        current_location = starting_location
         current_date = simulation_base_date.date()
         current_time = simulation_base_date
         while current_date <= last_simulation_date:

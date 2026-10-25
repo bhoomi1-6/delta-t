@@ -1,20 +1,21 @@
-"""Receive the dashboard's task list and convert it to models.Task."""
+"""Receive the dashboard's task list and run the planning workflow on it."""
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Literal
+import os
+from datetime import date, datetime, time
+from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.models import Task
-from app.timeutil import day_bounds
+from app.agents.orchestrator import review_plan
+from app.agents.schemas import Plan, PlanTask
+from app.integrations.simulation import DEFAULT_STARTING_LOCATION
+from app.steplog import step
+from app.timeutil import LOCAL_TIMEZONE, day_bounds
 
-# The dashboard has no length field, so assume this until it does.
-DEFAULT_TASK_MINUTES = 60
-END_OF_DAY = 24 * 60 - 1
-PRIORITY = {"low": 0, "medium": 1, "high": 2}
+PRIORITY = {"high": 0, "medium": 1, "low": 2}  # models.Task: 0 = high, 2 = low
 
 router = APIRouter(prefix="/api")
 
@@ -27,45 +28,55 @@ class FrontendTask(BaseModel):
     deadline: date
     priority: Literal["low", "medium", "high"]
     can_be_divided: bool = Field(default=False, alias="canBeDivided")
+    completion_percentage: float = Field(default=0.0, ge=0, le=100, alias="completionPercentage")
+    estimated_length: int = Field(gt=0, alias="estimatedLength")
 
 
 class PredictRequest(BaseModel):
     tasks: list[FrontendTask]
+    starting_location: str | None = Field(default=None, alias="startingLocation")
 
 
 class PredictResponse(BaseModel):
     simulation_day: date
-    tasks: list[Task]
+    tasks: list[PlanTask]
+    review: dict[str, Any]
 
 
-def to_task(task: FrontendTask, simulation_day: date) -> Task:
-    """Map a dashboard task onto the simulated day.
+def to_plan_task(task: FrontendTask) -> PlanTask:
+    """Map a dashboard task onto the planning agents' task schema.
 
     The dashboard deadline is a date with no time, so it is treated as the end
-    of that day: due on the simulated day -> minute 1439, due later -> no
-    deadline within the day, already past -> minute 0.
+    of that day (Europe/London).
     """
-    if task.deadline == simulation_day:
-        deadline = END_OF_DAY
-    elif task.deadline > simulation_day:
-        deadline = None
-    else:
-        deadline = 0
-
-    return Task(
+    return PlanTask(
         id=task.id,
         title=task.name,
-        estimated_length=DEFAULT_TASK_MINUTES,
+        estimated_length=task.estimated_length,
+        completion_pct=task.completion_percentage,
         can_be_divided=task.can_be_divided,
-        deadline=deadline,
+        deadline=datetime.combine(task.deadline, time(23, 59), tzinfo=LOCAL_TIMEZONE),
         priority=PRIORITY[task.priority],
     )
 
 
 @router.post("/predict")
 def predict(request: PredictRequest) -> PredictResponse:
-    simulation_day = day_bounds()[0].date()
+    tasks = [to_plan_task(task) for task in request.tasks]
+    starting_location = (
+        request.starting_location
+        or os.environ.get("STARTING_LOCATION")
+        or DEFAULT_STARTING_LOCATION
+    )
+
+    try:
+        with step("predict request"):
+            review = review_plan(Plan(events=[], tasks=tasks), starting_location)
+    except (RuntimeError, ValueError, FileNotFoundError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
     return PredictResponse(
-        simulation_day=simulation_day,
-        tasks=[to_task(task, simulation_day) for task in request.tasks],
+        simulation_day=day_bounds()[0].date(),
+        tasks=tasks,
+        review=review,
     )
