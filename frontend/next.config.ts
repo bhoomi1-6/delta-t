@@ -12,6 +12,22 @@ const nextConfig: NextConfig = {
     const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8000";
     return [
       { source: "/api/predict", destination: `${backendUrl}/api/predict` },
+      {
+        source: "/api/predict",
+        destination: "http://127.0.0.1:8000/api/predict",
+      },
+      {
+        source: "/auth/google",
+        destination: "http://127.0.0.1:8000/auth/google",
+      },
+      {
+        source: "/auth/google/callback",
+        destination: "http://127.0.0.1:8000/auth/google/callback",
+      },
+      {
+        source: "/api/calendar/:path*",
+        destination: "http://127.0.0.1:8000/api/calendar/:path*",
+      },
     ];
   },
 };

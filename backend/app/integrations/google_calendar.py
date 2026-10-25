@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import Resource, build
 from dotenv import load_dotenv
 
@@ -35,7 +33,6 @@ SCOPES = [
 ]
 
 DEFAULT_CREDENTIALS_FILE = "google-calendar-credentials.json"
-DEFAULT_TOKEN_FILE = "google-calendar-token.json"
 
 
 # ============================================================
@@ -67,71 +64,11 @@ def _configured_path(variable: str, default: str) -> Path:
     return path
 
 
-def _credentials() -> Credentials:
-    credentials_path = _configured_path(
-        "GOOGLE_CALENDAR_CREDENTIALS_FILE",
-        DEFAULT_CREDENTIALS_FILE,
-    )
-
-    token_path = _configured_path(
-        "GOOGLE_CALENDAR_TOKEN_FILE",
-        DEFAULT_TOKEN_FILE,
-    )
-
-    credentials: Credentials | None = None
-
-    if token_path.exists():
-        credentials = Credentials.from_authorized_user_file(
-            str(token_path),
-            SCOPES,
-        )
-
-    if credentials is not None and credentials.valid:
-        return credentials
-
-    if (
-        credentials is not None
-        and credentials.expired
-        and credentials.refresh_token
-    ):
-        credentials.refresh(Request())
-
-    else:
-        if not credentials_path.is_file():
-            raise FileNotFoundError(
-                "Google OAuth client credentials not found: "
-                f"{credentials_path}"
-            )
-
-        flow = InstalledAppFlow.from_client_secrets_file(
-            str(credentials_path),
-            SCOPES,
-        )
-
-        credentials = flow.run_local_server(port=0)
-
-    token_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    token_path.write_text(
-        credentials.to_json(),
-        encoding="utf-8",
-    )
-
-    token_path.chmod(0o600)
-
-    return credentials
-
-
-def _service() -> Resource:
-    return build(
-        "calendar",
-        "v3",
-        credentials=_credentials(),
-        cache_discovery=False,
-    )
+def _service(credentials: Credentials) -> Resource:
+    """Use credentials already associated with the current browser session."""
+    if credentials is None:
+        raise ValueError("Google Calendar credentials are required")
+    return build("calendar", "v3", credentials=credentials, cache_discovery=False)
 
 
 # ============================================================
@@ -224,17 +161,10 @@ def get_busy_events(
     start: datetime,
     end: datetime,
     calendar_id: str | None = None,
+    *,
+    credentials: Credentials,
 ) -> list[CalendarBusyEvent]:
-    """Fetch busy events overlapping a timezone-aware time range.
-
-    The first call starts Google's local OAuth consent flow
-    unless a valid token already exists.
-
-    Environment variables:
-        GOOGLE_CALENDAR_CREDENTIALS_FILE
-        GOOGLE_CALENDAR_TOKEN_FILE
-        GOOGLE_CALENDAR_ID
-    """
+    """Fetch events using the current user's connected Google account."""
 
     if start.tzinfo is None or end.tzinfo is None:
         raise ValueError(
@@ -251,7 +181,7 @@ def get_busy_events(
         or os.environ.get("GOOGLE_CALENDAR_ID", "primary")
     )
 
-    service = _service()
+    service = _service(credentials)
 
     calendar = (
         service.calendarList()
@@ -352,6 +282,8 @@ def _to_simulation_event(
 def get_day(
     day: date | None = None,
     calendar_id: str | None = None,
+    *,
+    credentials: Credentials,
 ) -> tuple[datetime, datetime, list[Event]]:
     """Get simulation events for one local day, midnight to midnight.
 
@@ -376,6 +308,7 @@ def get_day(
         start=simulation_start,
         end=simulation_end,
         calendar_id=calendar_id,
+        credentials=credentials,
     )
 
     simulation_events: list[Event] = []
@@ -402,30 +335,6 @@ def get_day(
     )
 
 
-# ============================================================
-# Example Usage
-# ============================================================
-
-if __name__ == "__main__":
-
-    simulation_start, simulation_end, events = (
-        get_day()
-    )
-
-    print(
-        "Simulation start:",
-        simulation_start.isoformat(),
-    )
-
-    print(
-        "Simulation end:",
-        simulation_end.isoformat(),
-    )
-
-    print(
-        "Number of events:",
-        len(events),
-    )
-
-    for event in events:
-        print(event)
+# Call from your authenticated FastAPI prediction endpoint:
+# credentials = get_calendar_credentials(request)
+# simulation_start, simulation_end, events = get_day(credentials=credentials)

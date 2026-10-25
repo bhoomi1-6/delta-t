@@ -15,7 +15,7 @@ from app.config import load_backend_environment
 from app.agents.schemas import Plan
 from app.models import Disruption
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
 class CalendarCommitment(TypedDict):

@@ -20,6 +20,7 @@ from app.integrations.router import get_route_durations_by_arrival
 from app.integrations.weather import get_oxford_weather_forecast
 from app.steplog import logger, step
 from app.timeutil import day_bounds
+from google.oauth2.credentials import Credentials
 
 # The chaos agent is skipped for now. The predictor still takes a ChaosReport,
 # so give it an empty one: no disruptions and no transit-shock scenario.
@@ -40,12 +41,13 @@ def _collect_context(
     starting_location: str,
     calendar_id: str | None,
     now: datetime,
+    credentials,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     # The simulated day is tomorrow, midnight to midnight; times in the plan
     # are minutes since that day's midnight.
     day_start, end = day_bounds(now=now)
     with step(f"calendar {day_start.date()}"):
-        busy_events = get_busy_events(day_start, end, calendar_id)
+        busy_events = get_busy_events(day_start, end, calendar_id, credentials=credentials)
     logger.info(
         "[calendar] %d event(s): %s",
         len(busy_events),
@@ -159,6 +161,7 @@ def review_plan(
     starting_location: str,
     calendar_id: str | None = None,
     now: datetime | None = None,
+    credentials: Credentials | None = None,
 ) -> dict[str, object]:
     """Run the predictor, repair, and judge agents on an existing plan."""
     _check_ready(starting_location)
@@ -177,6 +180,7 @@ def review_plan(
         starting_location,
         calendar_id,
         now,
+        credentials=credentials
     )
     agent_context: AgentContext = {
         "calendar_commitments": calendar_context,

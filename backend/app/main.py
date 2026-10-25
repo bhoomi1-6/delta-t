@@ -5,6 +5,9 @@ from fastapi import FastAPI
 
 from app.predict import router as predict_router
 
+from app.integrations.google_oauth import router as google_oauth_router
+#from app.api.predict import router as predict_router  # Adjust import path
+
 # Show the workflow's step logs (app.steplog) in the server terminal.
 logging.basicConfig(
     level=logging.INFO,
@@ -12,7 +15,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-app = FastAPI(title="delta-t")
+app = FastAPI()
+
+app.include_router(google_oauth_router)
 app.include_router(predict_router)
 
 

@@ -14,7 +14,7 @@ from app.agents.chaos import AgentContext, Prediction, TaskScheduleItem
 from app.agents.schemas import Plan
 from app.models import Disruption
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 ProposedTaskTime = TaskScheduleItem
 
@@ -72,6 +72,50 @@ def _validate_proposal(plan: Plan, proposal: RepairProposal) -> RepairProposal:
     return proposal
 
 
+def _restore_original_events(
+    plan: Plan,
+    proposal: RepairProposal,
+    calendar_ids: set[str],
+) -> RepairProposal:
+    """Restore omitted original plan events before validation.
+
+    Calendar commitments are context only and must not be duplicated in
+    proposed_plan.events. Original plan events, however, must be preserved.
+    Fixed events are canonicalized to the originals so the model cannot alter
+    their time, title, kind, or other fields.
+    """
+    original_by_id = {event.id: event for event in plan.events}
+
+    # Remove calendar commitments accidentally copied by Gemini. Keep all
+    # other output entries so duplicate/unexpected IDs remain detectable by
+    # _validate_proposal rather than being silently hidden.
+    proposed_events = [
+        event
+        for event in proposal.proposed_plan.events
+        if event.id not in calendar_ids
+    ]
+
+    proposed_ids = {event.id for event in proposed_events}
+    for original_event in plan.events:
+        if original_event.id not in proposed_ids:
+            # Do not fail merely because Gemini omitted an existing event;
+            # restore the canonical event from the input plan.
+            proposed_events.append(original_event)
+            proposed_ids.add(original_event.id)
+
+    # Fixed events are immutable. Use the original object even if Gemini
+    # returned a modified version with the same ID.
+    proposal.proposed_plan.events = [
+        original_by_id[event.id]
+        if event.id in original_by_id
+        and original_by_id[event.id].kind.value == "fixed"
+        else event
+        for event in proposed_events
+    ]
+
+    return proposal
+
+
 def propose_repair(
     plan: Plan,
     context: AgentContext,
@@ -96,7 +140,7 @@ IDs {json.dumps(task_ids)}. Preserve every ID exactly, including its spelling
 and case. Do not add calendar events to proposed_plan. Preserve event kinds and
 all task deadlines. Prioritize high-risk items from the simulation, respect the
 supplied weather/routes, and resolve overlaps where possible. Return proposed
-task start times as minutes since midnight. Do not claim the Monte Carlo
+ task start times as minutes since midnight. Do not claim the Monte Carlo
 results guarantee success; explain tradeoffs and list any unresolved issue.
 
 Original plan: {plan.model_dump_json()}
@@ -107,6 +151,8 @@ Measured risk, with canonical results keyed by stable event/task IDs: {json.dump
 """
     client = genai.Client(api_key=api_key)
     model = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
+    calendar_ids = {item["id"] for item in context["calendar_commitments"]}
+
     for attempt in range(2):
         response = client.models.generate_content(
             model=model,
@@ -121,16 +167,7 @@ Measured risk, with canonical results keyed by stable event/task IDs: {json.dump
 
         try:
             proposal = RepairProposal.model_validate_json(response.text)
-            # Calendar commitments are context, not part of the user's plan.
-            # Gemini sometimes copies them into proposed_plan.events, which
-            # would fail validation and double-count them in the predictor,
-            # so drop them here instead of spending a retry.
-            calendar_ids = {item["id"] for item in context["calendar_commitments"]}
-            proposal.proposed_plan.events = [
-                event
-                for event in proposal.proposed_plan.events
-                if event.id not in calendar_ids
-            ]
+            proposal = _restore_original_events(plan, proposal, calendar_ids)
             return _validate_proposal(plan, proposal)
         except (ValidationError, ValueError) as exc:
             if attempt == 1:
@@ -142,6 +179,8 @@ Your previous proposal was rejected by validation:
 {exc}
 Regenerate the complete proposal. Use exactly the required event and task IDs
 listed above; do not include Google Calendar commitments in proposed_plan.
+Ensure proposed_plan includes every original user event and task ID. Preserve
+fixed events exactly and schedule every task exactly once.
 """
 
     raise RuntimeError("Repair generation ended without a validated proposal.")

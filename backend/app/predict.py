@@ -6,7 +6,7 @@ import os
 from datetime import date, datetime, time
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.agents.orchestrator import review_plan
@@ -14,6 +14,11 @@ from app.agents.schemas import Plan, PlanTask
 from app.integrations.simulation import DEFAULT_STARTING_LOCATION
 from app.steplog import step
 from app.timeutil import LOCAL_TIMEZONE, day_bounds
+
+from app.integrations.google_oauth import get_calendar_credentials
+from app.integrations.google_calendar import get_day
+
+
 
 PRIORITY = {"high": 0, "medium": 1, "low": 2}  # models.Task: 0 = high, 2 = low
 
@@ -61,17 +66,21 @@ def to_plan_task(task: FrontendTask) -> PlanTask:
 
 
 @router.post("/predict")
-def predict(request: PredictRequest) -> PredictResponse:
-    tasks = [to_plan_task(task) for task in request.tasks]
+def predict(payload: PredictRequest, request: Request) -> PredictResponse:
+    credentials = get_calendar_credentials(request)
+    from app.integrations.google_calendar import get_day
+    simulation_start, simulation_end, events = get_day(credentials=credentials)
+
+    tasks = [to_plan_task(task) for task in payload.tasks]
     starting_location = (
-        request.starting_location
+        payload.starting_location
         or os.environ.get("STARTING_LOCATION")
         or DEFAULT_STARTING_LOCATION
     )
 
     try:
         with step("predict request"):
-            review = review_plan(Plan(events=[], tasks=tasks), starting_location)
+            review = review_plan(Plan(events=events, tasks=tasks), starting_location, credentials=credentials)
     except (RuntimeError, ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -80,3 +89,4 @@ def predict(request: PredictRequest) -> PredictResponse:
         tasks=tasks,
         review=review,
     )
+

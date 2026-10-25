@@ -300,16 +300,13 @@ export default function Dashboard({
                 ) : (
                   <>
                     <p className="dropdown-help">
-                      {calendarConfigured
-                        ? "Connect your Google account with read-only Calendar events permission."
-                        : "Add your Google OAuth credentials to .env.local to activate this connection."}
+                        "Connect your Google account with read-only Calendar events permission."
                     </p>
                     <button
                       className="dropdown-action"
                       type="button"
                       role="menuitem"
-                      disabled={!calendarConfigured}
-                      onClick={() => void signIn("google", { redirectTo: "/" })}
+                      onClick={() => { window.location.href = "/auth/google";}}
                     >
                       <Link2 size={16} /> Connect Google Calendar
                     </button>

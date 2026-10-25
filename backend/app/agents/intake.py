@@ -13,7 +13,7 @@ from app.config import load_backend_environment
 from app.agents.schemas import Plan
 from app.timeutil import day_bounds
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
 def parse_plan(description: str, plan_day: date | None = None) -> Plan:
