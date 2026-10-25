@@ -103,36 +103,6 @@ def test_collect_context_enriches_calendar_and_plan_events(
     }
 
 
-def test_review_day_returns_review_without_changing_calendar(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    plan = Plan(events=[], tasks=[])
-    monkeypatch.setattr(
-        orchestrator,
-        "parse_plan",
-        lambda *_args, **_kwargs: plan,
-    )
-    review = {"judge": {"measured_verdict": "unchanged"}}
-    review_calls: list[tuple[Plan, str, str | None]] = []
-
-    def fake_review_plan(
-        review_plan: Plan,
-        starting_location: str,
-        calendar_id: str | None,
-        now: datetime,
-    ) -> dict[str, object]:
-        review_calls.append((review_plan, starting_location, calendar_id))
-        return review
-
-    monkeypatch.setattr(orchestrator, "review_plan", fake_review_plan)
-
-    result = orchestrator.review_day("Plan my day", "Home")
-
-    assert result == review
-    assert review_calls == [(plan, "Home", None)]
-
-
 def test_review_plan_uses_requested_simulation_count_for_both_predictions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

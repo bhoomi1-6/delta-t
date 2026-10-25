@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
-import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,7 +9,6 @@ from datetime import datetime, timezone
 from app.config import load_backend_environment
 from app.agents.chaos import AgentContext
 from app.agents.judge import compare_timelines
-from app.agents.intake import parse_plan
 from app.agents.predictor import predict_outcomes
 from app.agents.repair import propose_repair
 from app.agents.schemas import Plan
@@ -148,20 +145,6 @@ def _check_ready(starting_location: str) -> None:
         raise RuntimeError("GEMINI_API_KEY is not set.")
 
 
-def review_day(
-    description: str,
-    starting_location: str,
-    calendar_id: str | None = None,
-) -> dict[str, object]:
-    """Return a proposed revision without writing to Google Calendar."""
-    _check_ready(starting_location)
-
-    now = datetime.now(timezone.utc)
-    day_start = day_bounds(now=now)[0]
-    plan = parse_plan(description, plan_day=day_start.date())
-    return review_plan(plan, starting_location, calendar_id, now)
-
-
 def review_plan(
     plan: Plan,
     starting_location: str,
@@ -247,27 +230,3 @@ def review_plan(
             "The simulator currently models transit shocks and rain-adjusted travel; other generated disruption fields are informational only.",
         ],
     }
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Review a day plan with calendar, weather, and route context."
-    )
-    parser.add_argument("description", nargs="+", help="Describe the day and tasks")
-    parser.add_argument(
-        "--starting-location",
-        required=True,
-        help="Where the day starts, for route estimates",
-    )
-    parser.add_argument("--calendar-id", help="Google Calendar ID (defaults to primary)")
-    args = parser.parse_args()
-    result = review_day(
-        " ".join(args.description),
-        args.starting_location,
-        args.calendar_id,
-    )
-    print(json.dumps(result, indent=2))
-
-
-if __name__ == "__main__":
-    main()
