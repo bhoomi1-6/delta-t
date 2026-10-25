@@ -138,6 +138,11 @@ that task reordering fixes an infeasible deadline. Task start times are
 priority/order hints, not reserved time blocks. Do not claim a change caused a
 risk change unless the supplied results establish that, or describe a
 suggestion as conflict-free or guaranteed without explicit verification.
+Calendar-move recommendations in the repair summary are advisory only. The
+calendar events were not moved in the repaired simulation, so do not count a
+candidate move as a measured improvement or describe its effect as verified.
+Keep such recommendations distinct from measured risk changes and say they
+were not applied or evaluated.
 
 Use event and task names exactly; never mention, infer, or output internal IDs.
 The repair warnings are already shown separately: do not repeat their issues

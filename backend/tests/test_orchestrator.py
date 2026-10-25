@@ -5,8 +5,24 @@ import pytest
 
 from app.agents import orchestrator
 from app.agents.schemas import Plan
-from app.integrations.google_calendar import CalendarBusyEvent
+from app.integrations.google_calendar import CalendarBusyEvent, _to_busy_event
 from app.models import Event
+
+
+def test_calendar_event_parsing_preserves_description() -> None:
+    event = _to_busy_event(
+        {
+            "id": "calendar-call",
+            "summary": "Project call",
+            "description": "Tentative; reschedule if needed.",
+            "start": {"dateTime": "2026-10-25T10:00:00+01:00"},
+            "end": {"dateTime": "2026-10-25T11:00:00+01:00"},
+        },
+        "Europe/London",
+    )
+
+    assert event is not None
+    assert event.description == "Tentative; reschedule if needed."
 
 
 def test_collect_context_enriches_calendar_and_plan_events(
@@ -20,6 +36,7 @@ def test_collect_context_enriches_calendar_and_plan_events(
         end=now + timedelta(days=1, hours=2),
         all_day=False,
         location="Lecture Hall",
+        description="Weekly in-person lecture.",
     )
     monkeypatch.setattr(
         orchestrator,
@@ -72,6 +89,7 @@ def test_collect_context_enriches_calendar_and_plan_events(
     )
 
     assert [item["title"] for item in calendar] == ["Lecture"]
+    assert calendar[0]["description"] == "Weekly in-person lecture."
     assert [item["title"] for item in conditions] == ["Lecture", "Project meeting"]
     assert routes == [("Home", "Lecture Hall"), ("Lecture Hall", "Department")]
     assert len(weather_calls) == 1

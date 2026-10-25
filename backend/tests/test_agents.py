@@ -219,7 +219,16 @@ def test_repair_retries_proposal_with_mismatched_event_ids(
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(repair.genai, "Client", lambda **_: FakeClient())
     context: AgentContext = {
-        "calendar_commitments": [],
+        "calendar_commitments": [
+            {
+                "id": "calendar-call",
+                "title": "Project call",
+                "start": "2026-10-25T10:00:00+01:00",
+                "end": "2026-10-25T11:00:00+01:00",
+                "location": None,
+                "description": "Tentative call; can be rescheduled if needed.",
+            }
+        ],
         "conditions": [],
         "starting_location": "Home",
         "day_start": datetime(2026, 10, 25),
@@ -235,15 +244,19 @@ def test_repair_retries_proposal_with_mismatched_event_ids(
         plan_day="2026-10-25",
     )
 
+    prompt = " ".join(prompts[0].split())
     assert len(prompts) == 2
-    assert '"meeting-1"' in prompts[0]
-    assert "Starting location: Home" in prompts[0]
-    assert "Preferred transport: transit" in prompts[0]
-    assert "Workday: 07:00 to 21:00 local time" in prompts[0]
-    assert "per-run causal attribution" in prompts[0]
-    assert "task reordering can fix" in prompts[0]
-    assert "not an interactive clarification flow" in prompts[0]
-    assert "not address the user with a direct question" in prompts[0]
+    assert '"meeting-1"' in prompt
+    assert "Starting location: Home" in prompt
+    assert "Preferred transport: transit" in prompt
+    assert "Workday: 07:00 to 21:00 local time" in prompt
+    assert "per-run causal attribution" in prompt
+    assert "task reordering can fix" in prompt
+    assert "not an interactive clarification flow" in prompt
+    assert "not address the user with a direct question" in prompt
+    assert "Tentative call; can be rescheduled if needed." in prompt
+    assert "assess its likely flexibility cautiously" in prompt
+    assert "advisory, unverified, and not applied" in prompt
     assert "previous proposal was rejected" in prompts[1]
     assert result.proposed_plan.events[0].id == "meeting-1"
 
@@ -321,11 +334,13 @@ def test_judge_prompt_uses_event_names_not_internal_ids(monkeypatch) -> None:
 
     judge.compare_timelines(prediction, prediction, proposal)
 
-    assert "Meet Alex" in prompts[0]
-    assert "Limited work window before deadline." in prompts[0]
-    assert "provides no cause, say so once" in prompts[0]
-    assert "change in percentage points" in prompts[0]
-    assert "do not repeat their issues" in prompts[0]
-    assert "do not ask" in prompts[0]
-    assert "direct question" in prompts[0]
-    assert "secret-event-id" not in prompts[0]
+    prompt = " ".join(prompts[0].split())
+    assert "Meet Alex" in prompt
+    assert "Limited work window before deadline." in prompt
+    assert "provides no cause, say so once" in prompt
+    assert "change in percentage points" in prompt
+    assert "do not repeat their issues" in prompt
+    assert "do not ask" in prompt
+    assert "direct question" in prompt
+    assert "not applied or evaluated" in prompt
+    assert "secret-event-id" not in prompt

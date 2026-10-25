@@ -66,9 +66,11 @@ mode, starting location, and workday start/end hours; those preferences are
 stored in the browser and used for predictions. `GEMINI_MODEL` can override
 the default model.
 
-Calendar event titles, locations, the supplied plan, and fetched conditions are
-sent to Google's Gemini API for the review. Only run it with data you are
-comfortable sending to that service. Review the output; this prototype does not
+Calendar event titles, descriptions, locations, the supplied plan, and fetched
+conditions are sent to Google's Gemini API for the review. Calendar-move
+recommendations are advisory only: the app does not modify calendar events, and
+those proposed moves are not included in the simulation. Only run it with data
+you are comfortable sending to that service. Review the output; this prototype does not
 independently prove that the proposed schedule is clash-free. The intake agent
 uses the simulated date and local Europe/London datetimes for events and task
 deadlines. A task without a stated deadline is simulated as due at the end of

@@ -59,6 +59,7 @@ def _collect_context(
                 "start": event.start.isoformat(),
                 "end": event.end.isoformat(),
                 "location": event.location,
+                "description": event.description,
             }
         )
         itinerary.append(

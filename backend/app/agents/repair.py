@@ -157,8 +157,8 @@ User preferences:
   missing from that entry.
 
 Hard constraints:
-- Google Calendar commitments are fixed, are supplied separately, and must not
-  be added to proposed_plan.events.
+- Google Calendar events are read-only context, must not be added to
+  proposed_plan.events, and must never be described as already changed.
 - proposed_plan must contain exactly the original user event IDs
   {json.dumps(event_ids)} and task IDs {json.dumps(task_ids)}. Preserve IDs
   exactly in schema fields; never use IDs in user-facing prose.
@@ -180,12 +180,30 @@ Repair priorities:
    supplied inputs. Do not describe moving a task earlier/later as a fix for
    an infeasible deadline. Task start times are ordering hints, not reserved
    calendar blocks, so do not imply they create a verified time block.
-4. If resolving a high-risk conflict requires changing a protected deadline,
-   workday, or preference, preserve it and state the specific user decision
-   needed in warnings. State the available options and their consequence
-   declaratively; this report is not an interactive clarification flow, so do
-   not address the user with a direct question. Do not silently alter protected
-   values or imply the conflict was resolved.
+4. When a calendar event causes a meaningful conflict, assess its likely
+   flexibility cautiously from its title and description. Lectures, classes,
+   exams, interviews, and explicit appointments are usually likely fixed;
+   calls, personal activities, and tentative/hold events may be more flexible,
+   but neither category is certain without explicit evidence. Do not infer
+   permission to move an event from its title alone.
+5. If an event appears potentially movable, you may recommend a candidate
+   alternative in changes or warnings. Name the event, its current time, the
+   candidate time, the conflict it could relieve, and why it appears
+   potentially flexible. Suggest a specific time only when the supplied
+   calendar and plan show a plausible conflict-free slot; otherwise state that
+   the organizer or user would need to choose one. Label every calendar move
+   as advisory, unverified, and not applied. Do not alter proposed_plan or
+   claim the candidate move was simulated.
+6. If resolving a high-risk conflict requires changing a protected deadline,
+   workday, preference, or calendar event, state the available options and
+   consequences declaratively in warnings. This report is not an interactive
+   clarification flow, so do not address the user with a direct question. Do
+   not silently alter protected values or imply the conflict was resolved.
+
+The simulator treats fetched calendar events as unchanged commitments. Any
+suggested calendar move is outside the simulated repaired plan, so do not claim
+it improves the measured risk. When such a suggestion is made, include one
+clear warning that it was not applied or evaluated.
 
 Task diagnostics are screening evidence, not per-run causal attribution. If
 they do not identify a specific constraint, do not invent a cause for the

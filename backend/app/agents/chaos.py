@@ -19,13 +19,14 @@ DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 
 class CalendarCommitment(TypedDict):
-    """A fixed calendar event shared by the planning agents."""
+    """A calendar event shared by the planning agents."""
 
     id: str
     title: str
     start: str
     end: str
     location: str | None
+    description: NotRequired[str | None]
 
 
 class ContextItem(TypedDict):

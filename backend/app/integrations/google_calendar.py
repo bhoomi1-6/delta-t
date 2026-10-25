@@ -41,7 +41,7 @@ DEFAULT_CREDENTIALS_FILE = "google-calendar-credentials.json"
 
 @dataclass(frozen=True)
 class CalendarBusyEvent:
-    """A Google Calendar event that blocks the schedule."""
+    """A Google Calendar event used as schedule context."""
 
     event_id: str
     summary: str
@@ -49,6 +49,7 @@ class CalendarBusyEvent:
     end: datetime
     all_day: bool
     location: str | None = None
+    description: str | None = None
 
 
 # ============================================================
@@ -150,6 +151,7 @@ def _to_busy_event(
         end=end,
         all_day=start_all_day and end_all_day,
         location=event.get("location"),
+        description=event.get("description"),
     )
 
 
