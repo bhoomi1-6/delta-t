@@ -186,6 +186,30 @@ def _map_risks_by_title(
     }
 
 
+def _named_risks(
+    risks_by_id: dict[str, dict[str, float]],
+    inputs: _SimulationInputs,
+) -> list[dict[str, object]]:
+    named_risks: list[dict[str, object]] = []
+    categories = (
+        ("meetings", inputs.meeting_ids),
+        ("tasks", inputs.task_ids),
+        ("unfinished_tasks", inputs.task_ids),
+    )
+    for category, simulation_names in categories:
+        for simulation_name, item_id in simulation_names.items():
+            named_risks.append(
+                {
+                    "name": inputs.display_names[simulation_name],
+                    "category": category,
+                    "failure_probability_percent": risks_by_id[category].get(
+                        item_id, 0.0
+                    ),
+                }
+            )
+    return named_risks
+
+
 def predict_outcomes(
     plan: Plan,
     context: AgentContext | list[dict[str, object]],
@@ -280,6 +304,7 @@ def predict_outcomes(
             for disruption in chaos_report.disruptions
         ],
         "risk_by_id": risks_by_id,
+        "risk_by_name": _named_risks(risks_by_id, inputs),
         "limitations": [
             "Only transit shocks and rain-adjusted travel affect simulation outcomes; other disruption details are not yet modeled.",
             "Task start times affect task priority/order, not exact clock-time blocking.",

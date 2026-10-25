@@ -3,6 +3,7 @@ from datetime import datetime
 from app.agents import predictor
 from app.agents import repair
 from app.agents.chaos import AgentContext, ChaosReport, TaskScheduleItem
+from app.agents import judge
 from app.agents.judge import _average_failure_risk
 from app.agents.repair import RepairProposal
 from app.agents.schemas import Plan, PlanTask
@@ -99,6 +100,17 @@ def test_predictor_sorts_events_by_model_start_time() -> None:
         "event:earlier",
         "event:later",
     ]
+    named_risks = predictor._named_risks(
+        {
+            "meetings": {"later": 25.0, "earlier": 10.0},
+            "tasks": {},
+            "unfinished_tasks": {},
+        },
+        inputs,
+    )
+
+    assert {risk["name"] for risk in named_risks} == {"Earlier", "Later"}
+    assert all("id" not in risk for risk in named_risks)
 
 
 def test_repair_retries_proposal_with_mismatched_event_ids(
@@ -197,3 +209,63 @@ def test_judge_average_risk_uses_all_failure_categories() -> None:
     }
 
     assert _average_failure_risk(prediction) == 40.0
+
+
+def test_judge_prompt_uses_event_names_not_internal_ids(monkeypatch) -> None:
+    prompts: list[str] = []
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            prompts.append(str(kwargs["contents"]))
+            return type(
+                "Response",
+                (),
+                {
+                    "text": (
+                        '{"verdict":"unchanged","summary":"Meet Alex is unchanged.",'
+                        '"tradeoffs":[],"remaining_risks":[]}'
+                    )
+                },
+            )()
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(judge, "load_backend_environment", lambda: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(judge.genai, "Client", lambda **_: FakeClient())
+    proposal = RepairProposal(
+        proposed_plan=Plan(
+            events=[
+                Event(
+                    id="secret-event-id",
+                    title="Meet Alex",
+                    kind=EventKind.fixed,
+                    std=0,
+                    start_time=datetime(2026, 10, 25, 10),
+                    end_time=datetime(2026, 10, 25, 11),
+                )
+            ],
+            tasks=[],
+        ),
+        proposed_task_schedule=[],
+        reasoning="Keep the meeting.",
+        changes=[],
+        warnings=[],
+    )
+    prediction = {
+        "risk_by_id": {"meetings": {"secret-event-id": 25.0}, "tasks": {}, "unfinished_tasks": {}},
+        "risk_by_name": [
+            {
+                "name": "Meet Alex",
+                "category": "meetings",
+                "failure_probability_percent": 25.0,
+            }
+        ],
+        "limitations": [],
+    }
+
+    judge.compare_timelines(prediction, prediction, proposal)
+
+    assert "Meet Alex" in prompts[0]
+    assert "secret-event-id" not in prompts[0]

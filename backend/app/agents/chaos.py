@@ -68,6 +68,7 @@ class Prediction(TypedDict, total=False):
     """Predictor output; canonical risk maps are keyed by event/task ID."""
 
     risk_by_id: RisksById
+    risk_by_name: list[dict[str, object]]
     meeting_failure_probabilities: dict[str, float]
     task_failure_probabilities: dict[str, float]
     task_unfinished_probabilities: dict[str, float]
