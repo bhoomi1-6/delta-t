@@ -8,10 +8,8 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
-  CircleHelp,
   ClipboardList,
   LayoutDashboard,
-  Lightbulb,
   Link2,
   Plus,
   Pencil,
@@ -392,7 +390,6 @@ function summarisePrediction({ review, simulation_day: simulationDay }: PredictR
 }
 
 type DashboardProps = {
-  suggestionText: string;
   /** Cards generated on the server by your LLM, not manually added. */
   informationCards?: InfoCard[];
 };
@@ -439,11 +436,7 @@ function formatDeadline(isoDate: string) {
       }).format(date);
 }
 
-export default function Dashboard({
-  suggestionText,
-  // Supply informationCards from your LLM in app/page.tsx.
-  informationCards = [],
-}: DashboardProps) {
+export default function Dashboard({ informationCards = [] }: DashboardProps) {
   const [tasks, setTasks] = useLocalCollection<Task>(
     "flowboard:tasks:v1",
     normalizeStoredTasks,
@@ -471,7 +464,6 @@ export default function Dashboard({
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const shownCards = prediction?.summaryCards ?? informationCards;
-  const shownSuggestion = prediction?.suggestionText ?? suggestionText;
 
   useEffect(() => {
     if (!detailsOpen) return;
@@ -727,7 +719,7 @@ export default function Dashboard({
         throw new Error(error?.detail ?? `Prediction request failed (${response.status})`);
       }
       // The backend runs the planning workflow and returns its review; turn it
-      // into the Information cards and Suggestions shown on the right.
+      // into the Information cards and detailed simulation results.
       const result = (await response.json()) as PredictResponse;
       setPrediction(summarisePrediction(result));
       setCompletedSimulationCount(result.review.original_prediction.num_simulations_per_scenario);
@@ -745,7 +737,7 @@ export default function Dashboard({
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar-left">
-          <Image className="brand-logo" src="/deltat.svg" alt="" width={40} height={37} priority />
+          <Image className="brand-logo" src="/deltat.svg" alt="" width={40} height={36} priority />
           <span className="brand-name">delta-t</span>
           <span className="topbar-divider" />
           <nav className="workspace-navigation" aria-label="Workspace">
@@ -849,7 +841,6 @@ export default function Dashboard({
             </span>
             <h1>
               {activeTab === "dashboard" ? "Your dashboard" : "Settings"}
-              {activeTab === "dashboard" && <span className="wave" aria-hidden="true">✳</span>}
             </h1>
             <p>
               {activeTab === "dashboard"
@@ -879,13 +870,13 @@ export default function Dashboard({
             gap: 8px;
             width: 100%;
             border: 0;
-            border-radius: 12px;
+            border-radius: 7px;
             padding: 14px 16px;
             font-size: 13px;
             font-weight: 800;
             color: white;
-            background: linear-gradient(145deg, #806df3, #705ae6);
-            box-shadow: 0 6px 16px #8069e629;
+            background: #231f20;
+            box-shadow: none;
           }
           .prediction-status {
             color: #737b92;
@@ -1253,7 +1244,7 @@ export default function Dashboard({
             </section>
           </div>
 
-          <div className={`right-stack${prediction ? " prediction-active" : ""}`}>
+          <div className="right-stack">
             <section className="panel info-panel" aria-labelledby="info-heading">
               <div className="panel-heading compact-heading">
                 <div className="heading-text">
@@ -1291,22 +1282,6 @@ export default function Dashboard({
               </div>
             </section>
 
-            {!prediction && <section className="panel suggestions-panel" aria-labelledby="suggestions-heading">
-              <div className="panel-heading compact-heading">
-                <div className="heading-text">
-                  <div className="section-icon mint"><Sparkles size={20} /></div>
-                  <div><h2 id="suggestions-heading">Suggestions</h2><p>A little help from AI</p></div>
-                </div>
-                <div className="ai-label"><span className="ai-pulse" /> AI SPACE</div>
-              </div>
-              <div className="suggestions-content scroll-area" aria-live="polite">
-                {shownSuggestion.trim() ? (
-                  <div className="llm-output"><span className="llm-heading"><Sparkles size={16} /> Your latest suggestions</span><p>{shownSuggestion}</p></div>
-                ) : (
-                  <div className="suggestion-empty"><div className="suggestion-glow"><Lightbulb size={29} /></div><h3>Fresh ideas, when you need them.</h3><p>Once you connect your LLM, its personalised suggestions will appear right here.</p><span className="llm-hint"><CircleHelp size={14} /> Add your response in <code>app/page.tsx</code></span></div>
-                )}
-              </div>
-            </section>}
           </div>
         </div>
         ) : (
