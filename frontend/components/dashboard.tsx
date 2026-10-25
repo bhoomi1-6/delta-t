@@ -16,12 +16,25 @@ import {
   Plus,
   Pencil,
   Play,
+  Settings,
   Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 
 type Priority = "low" | "medium" | "high";
+type TransportMode = "fastest" | "walking" | "transit" | "cycling";
+type DashboardTab = "dashboard" | "settings";
+
+const DEFAULT_HOME_LOCATION = "St. Catherine's College";
+const SETTINGS_STORAGE_KEY = "flowboard:settings:v1";
+const DEFAULT_WORKDAY_START_HOUR = 8;
+const DEFAULT_WORKDAY_END_HOUR = 19;
+
+function formatHour(hour: number) {
+  if (hour === 24) return "12:00 AM (next day)";
+  return `${hour % 12 || 12}:00 ${hour < 12 ? "AM" : "PM"}`;
+}
 
 type Task = {
   id: string;
@@ -143,8 +156,75 @@ export default function Dashboard({
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionMessage, setPredictionMessage] = useState("");
   const [prediction, setPrediction] = useState<ReturnType<typeof summarisePrediction> | null>(null);
+  const [preferredTransportMode, setPreferredTransportMode] = useState<TransportMode>("fastest");
+  const [homeLocation, setHomeLocation] = useState(DEFAULT_HOME_LOCATION);
+  const [workdayStartHour, setWorkdayStartHour] = useState(DEFAULT_WORKDAY_START_HOUR);
+  const [workdayEndHour, setWorkdayEndHour] = useState(DEFAULT_WORKDAY_END_HOUR);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const shownCards = prediction?.cards ?? informationCards;
   const shownSuggestion = prediction?.suggestionText ?? suggestionText;
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (stored) {
+        const settings: unknown = JSON.parse(stored);
+        if (settings && typeof settings === "object") {
+          const saved = settings as Record<string, unknown>;
+          if (
+            saved.preferredTransportMode === "fastest" ||
+            saved.preferredTransportMode === "walking" ||
+            saved.preferredTransportMode === "transit" ||
+            saved.preferredTransportMode === "cycling"
+          ) {
+            setPreferredTransportMode(saved.preferredTransportMode);
+          }
+          if (
+            typeof saved.homeLocation === "string" &&
+            saved.homeLocation.trim()
+          ) {
+            setHomeLocation(saved.homeLocation);
+          }
+          const savedStartHour = Number.isInteger(saved.workdayStartHour)
+            && Number(saved.workdayStartHour) >= 0
+            && Number(saved.workdayStartHour) < 24
+            ? Number(saved.workdayStartHour)
+            : DEFAULT_WORKDAY_START_HOUR;
+          const savedEndHour = Number.isInteger(saved.workdayEndHour)
+            && Number(saved.workdayEndHour) > 0
+            && Number(saved.workdayEndHour) <= 24
+            ? Number(saved.workdayEndHour)
+            : DEFAULT_WORKDAY_END_HOUR;
+          if (savedEndHour > savedStartHour) {
+            setWorkdayStartHour(savedStartHour);
+            setWorkdayEndHour(savedEndHour);
+          }
+        }
+      }
+    } catch {
+      // Ignore invalid or unavailable local settings and use defaults.
+    } finally {
+      setSettingsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    try {
+      window.localStorage.setItem(
+        SETTINGS_STORAGE_KEY,
+        JSON.stringify({
+          preferredTransportMode,
+          homeLocation,
+          workdayStartHour,
+          workdayEndHour,
+        }),
+      );
+    } catch {
+      // Settings remain usable for this page session if storage is unavailable.
+    }
+  }, [homeLocation, preferredTransportMode, settingsLoaded, workdayEndHour, workdayStartHour]);
 
   const [taskName, setTaskName] = useState("");
   const [deadline, setDeadline] = useState("");
@@ -200,6 +280,14 @@ export default function Dashboard({
   async function startPrediction() {
     if (predictionLoading) return;
     setPredictionMessage("");
+    if (!homeLocation.trim()) {
+      setPredictionMessage("Set a home location in Settings before predicting.");
+      return;
+    }
+    if (workdayEndHour <= workdayStartHour) {
+      setPredictionMessage("Your workday must end after it starts.");
+      return;
+    }
 
     // Older tasks in localStorage do not have an estimated length. Never
     // invent a duration: users must provide one before sending to Python.
@@ -226,6 +314,10 @@ export default function Dashboard({
             ...task,
             completionPercentage: task.completionPercentage ?? 0,
           })),
+          preferredTransportMode,
+          startingLocation: homeLocation.trim(),
+          workdayStartHour,
+          workdayEndHour,
         }),
       });
       if (!response.ok) {
@@ -254,9 +346,26 @@ export default function Dashboard({
           </div>
           <span className="brand-name">flowboard<span className="brand-period">.</span></span>
           <span className="topbar-divider" />
-          <span className="active-navigation">
-            <LayoutDashboard size={16} strokeWidth={2.2} /> Dashboard
-          </span>
+          <nav className="workspace-navigation" aria-label="Workspace">
+            <button
+              className={activeTab === "dashboard" ? "active-navigation" : "navigation-button"}
+              type="button"
+              aria-label="Dashboard"
+              aria-current={activeTab === "dashboard" ? "page" : undefined}
+              onClick={() => setActiveTab("dashboard")}
+            >
+              <LayoutDashboard size={16} strokeWidth={2.2} /> Dashboard
+            </button>
+            <button
+              className={activeTab === "settings" ? "active-navigation" : "navigation-button"}
+              type="button"
+              aria-label="Settings"
+              aria-current={activeTab === "settings" ? "page" : undefined}
+              onClick={() => setActiveTab("settings")}
+            >
+              <Settings size={16} strokeWidth={2.2} /> Settings
+            </button>
+          </nav>
         </div>
 
         <div className="topbar-right">
@@ -322,9 +431,19 @@ export default function Dashboard({
       <main className="dashboard-main">
         <div className="page-intro">
           <div>
-            <span className="eyebrow"><span className="eyebrow-dot" /> YOUR PRODUCTIVITY HUB</span>
-            <h1>Your dashboard <span className="wave" aria-hidden="true">✳</span></h1>
-            <p>One calm place for everything you need to get done.</p>
+            <span className="eyebrow">
+              <span className="eyebrow-dot" />
+              {activeTab === "dashboard" ? "YOUR PRODUCTIVITY HUB" : "PREFERENCES"}
+            </span>
+            <h1>
+              {activeTab === "dashboard" ? "Your dashboard" : "Settings"}
+              {activeTab === "dashboard" && <span className="wave" aria-hidden="true">✳</span>}
+            </h1>
+            <p>
+              {activeTab === "dashboard"
+                ? "One calm place for everything you need to get done."
+                : "Personalize how your day is simulated."}
+            </p>
           </div>
         </div>
 
@@ -362,6 +481,42 @@ export default function Dashboard({
             line-height: 1.5;
             text-align: center;
             overflow-wrap: anywhere;
+          }
+          .transport-preference {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 100%;
+            color: #66708a;
+            font-size: 10px;
+            font-weight: 700;
+          }
+          .transport-preference select {
+            width: 100%;
+            min-width: 0;
+            padding: 8px;
+            border: 1px solid #e5e4ef;
+            border-radius: 8px;
+            background: white;
+            color: #39415e;
+            font-size: 11px;
+          }
+          .transport-preference input {
+            width: 100%;
+            min-width: 0;
+            padding: 10px;
+            border: 1px solid #e5e4ef;
+            border-radius: 8px;
+            background: white;
+            color: #39415e;
+            font-size: 13px;
+          }
+          .transport-preference-help {
+            margin: 0;
+            color: #737b92;
+            font-size: 10px;
+            line-height: 1.4;
+            text-align: center;
           }
           .task-edit-controls {
             display: flex;
@@ -449,6 +604,7 @@ export default function Dashboard({
             .prediction-start-button { width: min(100%, 260px); }
           }
         `}</style>
+        {activeTab === "dashboard" ? (
         <div className="dashboard-grid prediction-layout">
           <section className="panel todo-panel" aria-labelledby="todo-heading">
             <div className="panel-heading">
@@ -727,6 +883,82 @@ export default function Dashboard({
             </section>
           </div>
         </div>
+        ) : (
+          <section className="settings-panel" aria-labelledby="settings-heading">
+            <div className="settings-panel-heading">
+              <div className="section-icon lilac"><Settings size={20} /></div>
+              <div>
+                <h2 id="settings-heading">Simulation preferences</h2>
+                <p>These settings are saved in this browser and used for your next prediction.</p>
+              </div>
+            </div>
+            <div className="settings-fields">
+              <label className="transport-preference" htmlFor="preferred-transport-mode">
+                Preferred transport
+                <select
+                  id="preferred-transport-mode"
+                  value={preferredTransportMode}
+                  onChange={(event) =>
+                    setPreferredTransportMode(event.target.value as TransportMode)
+                  }
+                >
+                  <option value="fastest">Fastest available</option>
+                  <option value="walking">Walking</option>
+                  <option value="transit">Public transport</option>
+                  <option value="cycling">Cycling</option>
+                </select>
+                <span className="settings-help">
+                  Used as the preferred mode when estimating travel time. Weather can affect walking and cycling.
+                </span>
+              </label>
+              <label className="transport-preference" htmlFor="home-location">
+                Home / day-start location
+                <input
+                  id="home-location"
+                  type="text"
+                  value={homeLocation}
+                  onChange={(event) => setHomeLocation(event.target.value)}
+                  maxLength={200}
+                  placeholder="e.g. St. Catherine's College"
+                  autoComplete="street-address"
+                />
+                <span className="settings-help">
+                  The simulator uses this as the starting point for your day.
+                </span>
+              </label>
+              <div className="work-hours-setting">
+                <h3>Work hours</h3>
+                <p className="settings-help">
+                  Choose when the simulator can schedule tasks. The end time must be after the start time.
+                </p>
+                <label htmlFor="workday-start">
+                  <span>Start: <strong>{formatHour(workdayStartHour)}</strong></span>
+                  <input
+                    id="workday-start"
+                    type="range"
+                    min={0}
+                    max={workdayEndHour - 1}
+                    step={1}
+                    value={workdayStartHour}
+                    onChange={(event) => setWorkdayStartHour(event.currentTarget.valueAsNumber)}
+                  />
+                </label>
+                <label htmlFor="workday-end">
+                  <span>End: <strong>{formatHour(workdayEndHour)}</strong></span>
+                  <input
+                    id="workday-end"
+                    type="range"
+                    min={workdayStartHour + 1}
+                    max={24}
+                    step={1}
+                    value={workdayEndHour}
+                    onChange={(event) => setWorkdayEndHour(event.currentTarget.valueAsNumber)}
+                  />
+                </label>
+              </div>
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -17,24 +16,31 @@ def test_collect_context_enriches_calendar_and_plan_events(
     calendar_event = CalendarBusyEvent(
         event_id="calendar-1",
         summary="Lecture",
-        start=now + timedelta(hours=1),
-        end=now + timedelta(hours=2),
+        start=now + timedelta(days=1, hours=1),
+        end=now + timedelta(days=1, hours=2),
         all_day=False,
         location="Lecture Hall",
     )
     monkeypatch.setattr(
         orchestrator,
         "get_busy_events",
-        lambda start, end, calendar_id: [calendar_event],
+        lambda start, end, calendar_id, **kwargs: [calendar_event],
     )
-    monkeypatch.setattr(
-        orchestrator,
-        "get_oxford_weather_forecast",
-        lambda at: {
-            "precipitation_probability": 70.0,
-            "precipitation_mm": 1.2,
-        },
-    )
+    weather_calls: list[list[datetime]] = []
+
+    def get_weather(targets: list[datetime]) -> list[dict[str, float]]:
+        weather_calls.append(targets)
+        return [
+            {
+                "precipitation_probability": 70.0,
+                "precipitation_mm": 1.2,
+                "rain_mm": 0.8,
+                "wind_speed_kmh": 35.0,
+            }
+            for _ in targets
+        ]
+
+    monkeypatch.setattr(orchestrator, "get_oxford_weather_forecasts", get_weather)
     routes: list[tuple[str, str]] = []
 
     def get_routes(origin: str, destination: str, arrival: datetime) -> dict[str, float]:
@@ -62,53 +68,47 @@ def test_collect_context_enriches_calendar_and_plan_events(
         "Home",
         None,
         now.astimezone(ZoneInfo("UTC")),
+        credentials=None,
     )
 
     assert [item["title"] for item in calendar] == ["Lecture"]
     assert [item["title"] for item in conditions] == ["Lecture", "Project meeting"]
     assert routes == [("Home", "Lecture Hall"), ("Lecture Hall", "Department")]
+    assert len(weather_calls) == 1
+    assert len(weather_calls[0]) == 2
     assert conditions[0]["weather"] == {
         "precipitation_probability": 70.0,
         "precipitation_mm": 1.2,
+        "rain_mm": 0.8,
+        "wind_speed_kmh": 35.0,
     }
 
 
 def test_review_day_returns_review_without_changing_calendar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeModels:
-        def generate_content(self, **_: object) -> SimpleNamespace:
-            return SimpleNamespace(
-                text=(
-                    '{"proposed_plan":{"events":[],"tasks":[]},"proposed_task_schedule":[],'
-                    '"reasoning":"Keep the meeting fixed.","changes":[],"warnings":[]}'
-                )
-            )
-
-    class FakeClient:
-        models = FakeModels()
-
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    plan = Plan(events=[], tasks=[])
     monkeypatch.setattr(
         orchestrator,
         "parse_plan",
-        lambda *_args, **_kwargs: Plan(events=[], tasks=[]),
+        lambda *_args, **_kwargs: plan,
     )
-    monkeypatch.setattr(
-        orchestrator,
-        "_collect_context",
-        lambda *args: ([{"id": "fixed-1"}], [{"event_id": "fixed-1"}]),
-    )
-    monkeypatch.setattr(
-        orchestrator,
-        "compare_timelines",
-        lambda *_: {"measured_verdict": "unchanged"},
-    )
-    monkeypatch.setattr(orchestrator.genai, "Client", lambda **_: FakeClient())
+    review = {"judge": {"measured_verdict": "unchanged"}}
+    review_calls: list[tuple[Plan, str, str | None]] = []
+
+    def fake_review_plan(
+        review_plan: Plan,
+        starting_location: str,
+        calendar_id: str | None,
+        now: datetime,
+    ) -> dict[str, object]:
+        review_calls.append((review_plan, starting_location, calendar_id))
+        return review
+
+    monkeypatch.setattr(orchestrator, "review_plan", fake_review_plan)
 
     result = orchestrator.review_day("Plan my day", "Home")
 
-    assert result["calendar_commitments"] == [{"id": "fixed-1"}]
-    assert result["repair"]["reasoning"] == "Keep the meeting fixed."
-    assert result["repair"]["proposed_plan"] == {"events": [], "tasks": []}
-    assert result["judge"] == {"measured_verdict": "unchanged"}
+    assert result == review
+    assert review_calls == [(plan, "Home", None)]

@@ -53,10 +53,18 @@ keys in `.env.example`. Both `.env` files are ignored by Git.
 The orchestrator parses the description, reads busy events from the selected
 Google Calendar, fetches Oxford weather and route estimates, and asks Gemini
 for a revised plan with reasoning and suggested task start times. It prints a
-proposal only; it does not edit Google Calendar. The existing weather and route
-helpers are unchanged and use fallback estimates when their APIs fail, so check
-their results rather than treating them as verified live data. Both integrations
-are Oxford-specific. `GEMINI_MODEL` can override the default model.
+proposal only; it does not edit Google Calendar. Weather forecasts are fetched
+in a daily hourly batch and cached for one hour; route estimates are cached for
+15 minutes and repeated itinerary legs are reused. Wind increases the estimated
+time and variability of walking and cycling, while the dashboard lets users
+choose fastest, walking, transit, or cycling as their preferred travel mode.
+These wind effects are initial heuristics, not calibrated forecasts. Both
+integrations are Oxford-specific and use fallback estimates when their APIs
+fail, so check the results rather than treating fallback data as verified live
+data. In the dashboard Settings tab, users can also choose a preferred travel
+mode, starting location, and workday start/end hours; those preferences are
+stored in the browser and used for predictions. `GEMINI_MODEL` can override
+the default model.
 
 Calendar event titles, locations, the supplied plan, and fetched conditions are
 sent to Google's Gemini API for the review. Only run it with data you are

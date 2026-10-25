@@ -50,6 +50,11 @@ class AgentContext(TypedDict):
     conditions: list[ContextItem]
     starting_location: str
     day_start: datetime
+    preferred_transport_mode: NotRequired[
+        Literal["fastest", "walking", "transit", "cycling"]
+    ]
+    workday_start_hour: NotRequired[int]
+    workday_end_hour: NotRequired[int]
 
 
 class TaskScheduleItem(BaseModel):

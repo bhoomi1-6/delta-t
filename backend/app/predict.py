@@ -16,9 +16,6 @@ from app.steplog import step
 from app.timeutil import LOCAL_TIMEZONE, day_bounds
 
 from app.integrations.google_oauth import get_calendar_credentials
-from app.integrations.google_calendar import get_day
-
-
 
 PRIORITY = {"high": 0, "medium": 1, "low": 2}  # models.Task: 0 = high, 2 = low
 
@@ -40,6 +37,11 @@ class FrontendTask(BaseModel):
 class PredictRequest(BaseModel):
     tasks: list[FrontendTask]
     starting_location: str | None = Field(default=None, alias="startingLocation")
+    preferred_transport_mode: Literal[
+        "fastest", "walking", "transit", "cycling"
+    ] = Field(default="fastest", alias="preferredTransportMode")
+    workday_start_hour: int = Field(default=8, ge=0, le=23, alias="workdayStartHour")
+    workday_end_hour: int = Field(default=19, ge=1, le=24, alias="workdayEndHour")
 
 
 class PredictResponse(BaseModel):
@@ -67,10 +69,12 @@ def to_plan_task(task: FrontendTask) -> PlanTask:
 
 @router.post("/predict")
 def predict(payload: PredictRequest, request: Request) -> PredictResponse:
+    if payload.workday_end_hour <= payload.workday_start_hour:
+        raise HTTPException(
+            status_code=422,
+            detail="workdayEndHour must be after workdayStartHour",
+        )
     credentials = get_calendar_credentials(request)
-    from app.integrations.google_calendar import get_day
-    simulation_start, simulation_end, events = get_day(credentials=credentials)
-
     tasks = [to_plan_task(task) for task in payload.tasks]
     starting_location = (
         payload.starting_location
@@ -80,7 +84,14 @@ def predict(payload: PredictRequest, request: Request) -> PredictResponse:
 
     try:
         with step("predict request"):
-            review = review_plan(Plan(events=events, tasks=tasks), starting_location, credentials=credentials)
+            review = review_plan(
+                Plan(events=[], tasks=tasks),
+                starting_location,
+                credentials=credentials,
+                preferred_transport_mode=payload.preferred_transport_mode,
+                workday_start_hour=payload.workday_start_hour,
+                workday_end_hour=payload.workday_end_hour,
+            )
     except (RuntimeError, ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
@@ -89,4 +100,3 @@ def predict(payload: PredictRequest, request: Request) -> PredictResponse:
         tasks=tasks,
         review=review,
     )
-
