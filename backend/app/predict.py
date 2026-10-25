@@ -17,8 +17,6 @@ from app.timeutil import LOCAL_TIMEZONE, day_bounds
 
 from app.integrations.google_oauth import get_calendar_credentials
 
-PRIORITY = {"high": 0, "medium": 1, "low": 2}  # models.Task: 0 = high, 2 = low
-
 router = APIRouter(prefix="/api")
 
 
@@ -28,8 +26,7 @@ class FrontendTask(BaseModel):
     id: str
     name: str = Field(min_length=1)
     deadline: date
-    priority: Literal["low", "medium", "high"]
-    can_be_divided: bool = Field(default=False, alias="canBeDivided")
+    can_be_divided: bool = Field(default=True, alias="canBeDivided")
     completion_percentage: float = Field(default=0.0, ge=0, le=100, alias="completionPercentage")
     estimated_length: int = Field(gt=0, alias="estimatedLength")
 
@@ -42,6 +39,7 @@ class PredictRequest(BaseModel):
     ] = Field(default="fastest", alias="preferredTransportMode")
     workday_start_hour: int = Field(default=8, ge=0, le=23, alias="workdayStartHour")
     workday_end_hour: int = Field(default=19, ge=1, le=24, alias="workdayEndHour")
+    num_simulations: int = Field(default=10000, ge=1, le=1000000, alias="numSimulations")
 
 
 class PredictResponse(BaseModel):
@@ -63,7 +61,6 @@ def to_plan_task(task: FrontendTask) -> PlanTask:
         completion_pct=task.completion_percentage,
         can_be_divided=task.can_be_divided,
         deadline=datetime.combine(task.deadline, time(23, 59), tzinfo=LOCAL_TIMEZONE),
-        priority=PRIORITY[task.priority],
     )
 
 
@@ -91,6 +88,7 @@ def predict(payload: PredictRequest, request: Request) -> PredictResponse:
                 preferred_transport_mode=payload.preferred_transport_mode,
                 workday_start_hour=payload.workday_start_hour,
                 workday_end_hour=payload.workday_end_hour,
+                num_simulations=payload.num_simulations,
             )
     except (RuntimeError, ValueError, FileNotFoundError) as error:
         raise HTTPException(status_code=502, detail=str(error)) from error

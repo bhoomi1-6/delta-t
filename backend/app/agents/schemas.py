@@ -14,9 +14,8 @@ class PlanTask(BaseModel):
     title: str
     estimated_length: int = Field(ge=1)
     completion_pct: float = Field(ge=0, le=100)
-    can_be_divided: bool = False
+    can_be_divided: bool = True
     deadline: datetime | None = None
-    priority: int = Field(ge=0, le=2)
 
 
 class Plan(BaseModel):

@@ -48,8 +48,12 @@ Rules:
 - Event kind must be deadline, flexible, travel, or fixed.
 - A task is work to complete, not a time-block event. Represent "finish X by
   3pm" as a task with a 15:00 deadline, not an event at 15:00.
-- Each task must have completion_pct from 0 to 100, priority as an integer from
-  0 (high) to 2 (low), and estimated_length in minutes.
+- Tasks can be worked on across multiple sessions by default. Set
+  can_be_divided to false only when the user explicitly says the task must be
+  completed in one uninterrupted sitting; do not infer this from task type.
+- Each task must have completion_pct from 0 to 100 and estimated_length in
+  minutes. Task priority is calculated from remaining effort, deadlines, and
+  available work time; do not assign a priority.
 - Use a stated task deadline as a local ISO datetime on the schedule date. Use
   null when no deadline is stated.
 - If task duration is not stated, make a conservative estimate and avoid

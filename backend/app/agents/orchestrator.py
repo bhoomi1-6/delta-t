@@ -171,6 +171,7 @@ def review_plan(
     preferred_transport_mode: str = "fastest",
     workday_start_hour: int = 8,
     workday_end_hour: int = 19,
+    num_simulations: int = 10000,
 ) -> dict[str, object]:
     """Run the predictor, repair, and judge agents on an existing plan."""
     _check_ready(starting_location)
@@ -205,6 +206,7 @@ def review_plan(
         original_prediction = predict_outcomes(
             plan,
             agent_context,
+            num_simulations=num_simulations,
         )
     logger.info("[predictor] risk by id: %s", original_prediction["risk_by_id"])
     with step("repair agent (Gemini)"):
@@ -220,6 +222,7 @@ def review_plan(
             proposal.proposed_plan,
             agent_context,
             task_schedule=proposal.proposed_task_schedule,
+            num_simulations=num_simulations,
         )
     logger.info("[predictor] risk by id: %s", repaired_prediction["risk_by_id"])
     with step("judge agent (Gemini)"):

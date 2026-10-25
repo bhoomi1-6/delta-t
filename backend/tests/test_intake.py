@@ -36,9 +36,7 @@ def test_parse_plan_returns_validated_structured_output(
           "title": "Finish report",
           "estimated_length": 90,
           "completion_pct": 0,
-          "can_be_divided": false,
-          "deadline": "2026-10-25T15:00:00",
-          "priority": 1
+          "deadline": "2026-10-25T15:00:00"
         }
       ]
     }
@@ -66,7 +64,7 @@ def test_parse_plan_returns_validated_structured_output(
     assert plan.events[0].start_time == datetime(2026, 10, 25, 10)
     assert plan.events[0].end_time == datetime(2026, 10, 25, 10, 45)
     assert plan.tasks[0].deadline == datetime(2026, 10, 25, 15)
-    assert plan.tasks[0].priority == 1
+    assert plan.tasks[0].can_be_divided is True
 
 
 def test_parse_plan_requires_nonempty_description() -> None:

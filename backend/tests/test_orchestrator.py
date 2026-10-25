@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -130,3 +131,39 @@ def test_review_day_returns_review_without_changing_calendar(
 
     assert result == review
     assert review_calls == [(plan, "Home", None)]
+
+
+def test_review_plan_uses_requested_simulation_count_for_both_predictions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = Plan(events=[], tasks=[])
+    prediction_calls: list[int] = []
+    proposal = SimpleNamespace(
+        proposed_plan=plan,
+        proposed_task_schedule=[],
+        changes=[],
+        model_dump=lambda **_kwargs: {},
+    )
+
+    monkeypatch.setattr(orchestrator, "_check_ready", lambda _location: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_collect_context",
+        lambda *_args, **_kwargs: ([], []),
+    )
+
+    def fake_predict_outcomes(*_args, num_simulations: int, **_kwargs):
+        prediction_calls.append(num_simulations)
+        return {"risk_by_id": {}}
+
+    monkeypatch.setattr(orchestrator, "predict_outcomes", fake_predict_outcomes)
+    monkeypatch.setattr(orchestrator, "propose_repair", lambda *_args: proposal)
+    monkeypatch.setattr(
+        orchestrator,
+        "compare_timelines",
+        lambda *_args: {"measured_verdict": "unchanged"},
+    )
+
+    orchestrator.review_plan(plan, "Home", num_simulations=2500)
+
+    assert prediction_calls == [2500, 2500]

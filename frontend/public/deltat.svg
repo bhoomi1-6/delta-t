@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 175.79 160">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #231f20;
+      }
+
+      .cls-2 {
+        font-family: LMRoman10-BoldItalic, 'Latin Modern Roman';
+        font-size: 70px;
+        font-style: italic;
+        font-weight: 700;
+        stroke: #231f20;
+        stroke-miterlimit: 10;
+      }
+    </style>
+  </defs>
+  <text class="cls-2" transform="translate(40.68 103.17)"><tspan x="0" y="0">Δt</tspan></text>
+  <path class="cls-1" d="M140.79,11c13.23,0,24,10.77,24,24v90c0,13.23-10.77,24-24,24H50.79c-13.23,0-24-10.77-24-24V35c0-13.23,10.77-24,24-24h90M140.79,0H50.79C31.47,0,15.79,15.67,15.79,35v90c0,19.33,15.67,35,35,35h90c19.33,0,35-15.67,35-35V35c0-19.33-15.67-35-35-35h0Z"/>
+</svg>

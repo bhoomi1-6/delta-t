@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { signIn, signOut } from "next-auth/react";
+import Image from "next/image";
+import { signOut } from "next-auth/react";
 import {
   BookOpen,
   CalendarDays,
   Check,
-  CheckCheck,
   ChevronDown,
   CircleHelp,
   ClipboardList,
@@ -22,7 +22,6 @@ import {
   X,
 } from "lucide-react";
 
-type Priority = "low" | "medium" | "high";
 type TransportMode = "fastest" | "walking" | "transit" | "cycling";
 type DashboardTab = "dashboard" | "settings";
 
@@ -30,6 +29,7 @@ const DEFAULT_HOME_LOCATION = "St. Catherine's College";
 const SETTINGS_STORAGE_KEY = "flowboard:settings:v1";
 const DEFAULT_WORKDAY_START_HOUR = 8;
 const DEFAULT_WORKDAY_END_HOUR = 19;
+const DEFAULT_SIMULATION_COUNT = 10000;
 
 function formatHour(hour: number) {
   if (hour === 24) return "12:00 AM (next day)";
@@ -40,11 +40,24 @@ type Task = {
   id: string;
   name: string;
   deadline: string; // Local YYYY-MM-DD date, without timezone shifting.
-  priority: Priority;
-  canBeDivided: boolean;
+  isIndivisible: boolean;
   completionPercentage: number; // 0-100, not a completed/not-completed flag.
   estimatedLength: number | null; // Required before predicting; legacy tasks may lack it.
 };
+
+function normalizeStoredTasks(items: unknown[]): Task[] {
+  return items.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return item as Task;
+    }
+    const task = item as Record<string, unknown>;
+    return {
+      ...task,
+      isIndivisible:
+        typeof task.isIndivisible === "boolean" ? task.isIndivisible : false,
+    } as Task;
+  });
+}
 
 export type InfoCard = {
   id: string;
@@ -55,25 +68,172 @@ export type InfoCard = {
 
 type PredictResponse = {
   review: {
+    original_prediction: {
+      num_simulations_per_scenario: number;
+      risk_by_name: NamedRisk[];
+      task_diagnostics: TaskDiagnostic[];
+    };
+    repaired_prediction: {
+      risk_by_name: NamedRisk[];
+      task_diagnostics: TaskDiagnostic[];
+    };
     judge: {
       measured_verdict: string;
       average_failure_risk_percent: { original: number; repaired: number };
       analysis: { summary: string; remaining_risks: string[] };
     };
-    repair: { changes: string[]; warnings: string[] };
+    repair: {
+      changes: string[];
+      warnings: string[];
+      proposed_plan: { tasks: Array<{ id: string; title: string }> };
+      proposed_task_schedule: Array<{
+        task_id: string;
+        start_time: number;
+        reasoning: string;
+      }>;
+    };
   };
+};
+
+type NamedRisk = {
+  name: string;
+  category: "meetings" | "tasks" | "unfinished_tasks";
+  failure_probability_percent: number;
+};
+
+type TaskDiagnostic = {
+  name: string;
+  deadline_within_simulation_horizon: boolean;
 };
 
 function summarisePrediction({ review }: PredictResponse) {
   const { judge, repair } = review;
   const risk = judge.average_failure_risk_percent;
+  const taskNames = new Map(
+    repair.proposed_plan.tasks.map((task) => [task.id, task.title]),
+  );
+  const proposedTaskOrder = [...repair.proposed_task_schedule]
+    .sort((left, right) => left.start_time - right.start_time)
+    .map((item) => ({
+      id: item.task_id,
+      name: taskNames.get(item.task_id) ?? "Task",
+      reasoning: item.reasoning.trim(),
+    }));
+  const formatRisk = (value: number | undefined) =>
+    value === undefined ? "not returned" : `${value.toFixed(1)}%`;
+  const riskKey = (item: NamedRisk) => `${item.category}\u0000${item.name}`;
+  const originalRisks = new Map(
+    review.original_prediction.risk_by_name.map((item) => [riskKey(item), item]),
+  );
+  const repairedRisks = new Map(
+    review.repaired_prediction.risk_by_name.map((item) => [riskKey(item), item]),
+  );
+  const originalDiagnostics = new Map(
+    review.original_prediction.task_diagnostics.map((item) => [item.name, item]),
+  );
+  const repairedDiagnostics = new Map(
+    review.repaired_prediction.task_diagnostics.map((item) => [item.name, item]),
+  );
+  const taskOutcomeLines: string[] = [];
+  const eventRiskCards: InfoCard[] = [];
+  const describeRiskChange = (before: number, after: number) => {
+    const change = after - before;
+    if (change > 0) return `risk increased by ${change.toFixed(1)} percentage points in the revised simulation`;
+    if (change < 0) return `risk decreased by ${Math.abs(change).toFixed(1)} percentage points in the revised simulation`;
+    return "risk was unchanged in the revised simulation";
+  };
+
+  for (const [key, original] of originalRisks) {
+    if (original.category === "unfinished_tasks") continue;
+    const repaired = repairedRisks.get(key);
+    const originalDeadlineRisk = original.failure_probability_percent;
+    if (original.category === "meetings") {
+      const repairedRisk = repaired?.failure_probability_percent;
+      if (originalDeadlineRisk === 0 && repairedRisk === 0) continue;
+      const comparison = repairedRisk === undefined
+        ? "Revised simulation risk not returned."
+        : `${describeRiskChange(originalDeadlineRisk, repairedRisk)}.`;
+      eventRiskCards.push({
+        id: `event-risk-${eventRiskCards.length}`,
+        category: "Event risk",
+        title: original.name,
+        description: `Missed-event risk: ${formatRisk(originalDeadlineRisk)} → ${formatRisk(repairedRisk)}. ${comparison} Consider leaving earlier, checking alternate transport or routes, or asking whether the event can be rescheduled. These options were not tested by the simulation, and your calendar was not changed.`,
+      });
+      continue;
+    }
+
+    const diagnostic = originalDiagnostics.get(original.name);
+    const repairedDiagnostic = repairedDiagnostics.get(original.name);
+    const withinHorizon =
+      diagnostic?.deadline_within_simulation_horizon ??
+      repairedDiagnostic?.deadline_within_simulation_horizon;
+    const unfinishedKey = riskKey({
+      ...original,
+      category: "unfinished_tasks",
+    });
+    const originalUnfinished = originalRisks.get(unfinishedKey)?.failure_probability_percent;
+    const repairedUnfinished = repairedRisks.get(unfinishedKey)?.failure_probability_percent;
+    if (withinHorizon === true) {
+      const after = repaired?.failure_probability_percent;
+      if (originalDeadlineRisk !== 0 || after !== 0) {
+        taskOutcomeLines.push(
+          `${original.name} — missed deadline: ${formatRisk(originalDeadlineRisk)} → ${formatRisk(after)}${after === undefined ? " (revised simulation risk not returned)" : `; ${describeRiskChange(originalDeadlineRisk, after)}`}.`,
+        );
+      }
+    } else if (
+      withinHorizon === false &&
+      originalUnfinished !== undefined &&
+      (originalUnfinished !== 0 || repairedUnfinished !== 0)
+    ) {
+      const after = repairedUnfinished;
+      taskOutcomeLines.push(
+        `${original.name} — unfinished at the 7-day simulation horizon: ${formatRisk(originalUnfinished)} → ${formatRisk(after)}${after === undefined ? " (revised simulation risk not returned)" : `; ${describeRiskChange(originalUnfinished, after)}`}.`,
+      );
+    }
+  }
+
+  const riskCards: InfoCard[] = [
+    ...(originalRisks.size > 0 &&
+    [...originalRisks.values()].some((item) => item.category === "meetings") &&
+    eventRiskCards.length === 0
+      ? [{
+          id: "event-attendance",
+          category: "Event attendance",
+          title: "No events were missed in the simulations",
+          description: `All tracked events were reached in both the original and revised schedules across ${review.original_prediction.num_simulations_per_scenario.toLocaleString()} simulations per schedule. This is a simulation result, not a guarantee.`,
+        }]
+      : []),
+    ...eventRiskCards,
+    ...(taskOutcomeLines.length > 0
+      ? [{
+          id: "task-risk-summary",
+          category: "Task outcomes",
+          title: "Task risk in original vs revised simulation",
+          description: taskOutcomeLines.join("\n"),
+        }]
+      : []),
+  ];
+
   const cards: InfoCard[] = [
+    ...riskCards,
     {
       id: "risk",
       category: "Risk",
       title: `Average failure risk: ${judge.measured_verdict}`,
-      description: `${risk.original.toFixed(1)}% before, ${risk.repaired.toFixed(1)}% after the proposed changes.`,
+      description: risk.original === 0 && risk.repaired === 0
+        ? "No failures were observed across tracked items in either simulated schedule."
+        : `Average measured failure risk across tracked tasks and events: ${risk.original.toFixed(1)}% in the original simulation and ${risk.repaired.toFixed(1)}% in the revised simulation.`,
     },
+    ...(proposedTaskOrder.length > 0
+      ? [{
+          id: "proposed-task-order",
+          category: "Suggested priority",
+          title: "Proposed order for the revised simulation",
+          description: `The baseline simulation automatically prioritizes tasks using their deadlines and remaining estimated effort. The revised simulation uses this proposed order:\n\n${proposedTaskOrder.map((task, index) =>
+            `${index + 1}. ${task.name}${task.reasoning ? ` — ${task.reasoning}` : ""}`
+          ).join("\n")}\n\nThis order is a priority hint, not a reserved timetable. It does not move calendar events or guarantee the task will be completed.`,
+        }]
+      : []),
     ...repair.changes.map((change, index) => ({
       id: `change-${index}`,
       category: "Change",
@@ -91,15 +251,12 @@ function summarisePrediction({ review }: PredictResponse) {
 }
 
 type DashboardProps = {
-  calendarConfigured: boolean;
-  calendarConnected: boolean;
-  calendarEmail: string | null;
   suggestionText: string;
   /** Cards generated on the server by your LLM, not manually added. */
   informationCards?: InfoCard[];
 };
 
-function useLocalCollection<T>(storageKey: string) {
+function useLocalCollection<T>(storageKey: string, normalize?: (items: unknown[]) => T[]) {
   const [items, setItems] = useState<T[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -108,14 +265,14 @@ function useLocalCollection<T>(storageKey: string) {
       const stored = window.localStorage.getItem(storageKey);
       if (stored) {
         const parsed: unknown = JSON.parse(stored);
-        if (Array.isArray(parsed)) setItems(parsed as T[]);
+        if (Array.isArray(parsed)) setItems(normalize ? normalize(parsed) : parsed as T[]);
       }
     } catch {
       // An invalid or blocked localStorage entry should not break the UI.
     } finally {
       setLoaded(true);
     }
-  }, [storageKey]);
+  }, [normalize, storageKey]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -142,20 +299,27 @@ function formatDeadline(isoDate: string) {
 }
 
 export default function Dashboard({
-  calendarConfigured,
-  calendarConnected,
-  calendarEmail,
   suggestionText,
   // Supply informationCards from your LLM in app/page.tsx.
   informationCards = [],
 }: DashboardProps) {
-  const [tasks, setTasks] = useLocalCollection<Task>("flowboard:tasks:v1");
+  const [tasks, setTasks] = useLocalCollection<Task>(
+    "flowboard:tasks:v1",
+    normalizeStoredTasks,
+  );
   const [taskFormOpen, setTaskFormOpen] = useState(false);
   const [calendarMenuOpen, setCalendarMenuOpen] = useState(false);
+  const [calendarStatus, setCalendarStatus] = useState<
+    "checking" | "connected" | "disconnected" | "error"
+  >("checking");
+  const [calendarConfigured, setCalendarConfigured] = useState(false);
+  const [calendarEmail, setCalendarEmail] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionMessage, setPredictionMessage] = useState("");
+  const [completedSimulationCount, setCompletedSimulationCount] = useState<number | null>(null);
   const [prediction, setPrediction] = useState<ReturnType<typeof summarisePrediction> | null>(null);
+  const [simulationCount, setSimulationCount] = useState(DEFAULT_SIMULATION_COUNT);
   const [preferredTransportMode, setPreferredTransportMode] = useState<TransportMode>("fastest");
   const [homeLocation, setHomeLocation] = useState(DEFAULT_HOME_LOCATION);
   const [workdayStartHour, setWorkdayStartHour] = useState(DEFAULT_WORKDAY_START_HOUR);
@@ -164,6 +328,51 @@ export default function Dashboard({
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const shownCards = prediction?.cards ?? informationCards;
   const shownSuggestion = prediction?.suggestionText ?? suggestionText;
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadCalendarStatus() {
+      try {
+        const response = await fetch("/api/calendar/account", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Calendar status request failed (${response.status})`);
+        }
+        const result: unknown = await response.json();
+        if (
+          !result ||
+          typeof result !== "object" ||
+          !("configured" in result) ||
+          typeof result.configured !== "boolean" ||
+          !("connected" in result) ||
+          typeof result.connected !== "boolean" ||
+          !("email" in result) ||
+          (result.email !== null && typeof result.email !== "string")
+        ) {
+          throw new Error("Calendar status response was invalid.");
+        }
+        if (!active) return;
+        setCalendarConfigured(result.configured);
+        setCalendarEmail(result.email);
+        setCalendarStatus(result.connected ? "connected" : "disconnected");
+      } catch {
+        if (active) setCalendarStatus("error");
+      }
+    }
+
+    void loadCalendarStatus();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const calendarConnected = calendarStatus === "connected";
+  const calendarStatusLabel = {
+    checking: "Checking calendar",
+    connected: "Calendar connected",
+    disconnected: "Calendar disconnected",
+    error: "Calendar status unavailable",
+  }[calendarStatus];
 
   useEffect(() => {
     try {
@@ -200,6 +409,13 @@ export default function Dashboard({
             setWorkdayStartHour(savedStartHour);
             setWorkdayEndHour(savedEndHour);
           }
+          if (
+            Number.isSafeInteger(saved.simulationCount) &&
+            Number(saved.simulationCount) >= 1 &&
+            Number(saved.simulationCount) <= 1000000
+          ) {
+            setSimulationCount(Number(saved.simulationCount));
+          }
         }
       }
     } catch {
@@ -219,17 +435,17 @@ export default function Dashboard({
           homeLocation,
           workdayStartHour,
           workdayEndHour,
+          simulationCount,
         }),
       );
     } catch {
       // Settings remain usable for this page session if storage is unavailable.
     }
-  }, [homeLocation, preferredTransportMode, settingsLoaded, workdayEndHour, workdayStartHour]);
+  }, [homeLocation, preferredTransportMode, settingsLoaded, simulationCount, workdayEndHour, workdayStartHour]);
 
   const [taskName, setTaskName] = useState("");
   const [deadline, setDeadline] = useState("");
-  const [priority, setPriority] = useState<Priority>("medium");
-  const [canBeDivided, setCanBeDivided] = useState(false);
+  const [isIndivisible, setIsIndivisible] = useState(false);
   const [completionPercentage, setCompletionPercentage] = useState(0);
   const [estimatedLength, setEstimatedLength] = useState("");
 
@@ -244,16 +460,14 @@ export default function Dashboard({
         id: crypto.randomUUID(),
         name: taskName.trim(),
         deadline,
-        priority,
-        canBeDivided,
+        isIndivisible,
         completionPercentage,
         estimatedLength: duration,
       },
     ]);
     setTaskName("");
     setDeadline("");
-    setPriority("medium");
-    setCanBeDivided(false);
+    setIsIndivisible(false);
     setCompletionPercentage(0);
     setEstimatedLength("");
     setTaskFormOpen(false);
@@ -263,7 +477,7 @@ export default function Dashboard({
     setTasks((existing) => existing.filter((task) => task.id !== id));
   }
 
-  function updateTask(id: string, changes: Partial<Pick<Task, "deadline" | "priority" | "canBeDivided" | "completionPercentage" | "estimatedLength">>) {
+  function updateTask(id: string, changes: Partial<Pick<Task, "deadline" | "isIndivisible" | "completionPercentage" | "estimatedLength">>) {
     // Never allow an edit to erase the required deadline.
     if (changes.deadline !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(changes.deadline)) return;
     if (changes.completionPercentage !== undefined) {
@@ -288,6 +502,10 @@ export default function Dashboard({
       setPredictionMessage("Your workday must end after it starts.");
       return;
     }
+    if (!Number.isSafeInteger(simulationCount) || simulationCount < 1 || simulationCount > 1000000) {
+      setPredictionMessage("Choose between 1 and 1,000,000 simulations.");
+      return;
+    }
 
     // Older tasks in localStorage do not have an estimated length. Never
     // invent a duration: users must provide one before sending to Python.
@@ -301,23 +519,30 @@ export default function Dashboard({
     }
 
     setPredictionLoading(true);
+    setCompletedSimulationCount(null);
     try {
       // Python converts dashboard fields into engine Task objects:
       // name -> title, completionPercentage -> completion_pct,
-      // estimatedLength -> estimated_length, priority label -> 0/1/2,
-      // canBeDivided -> can_be_divided, date -> end-of-day datetime.
+      // estimatedLength -> estimated_length; simulation priority is derived
+      // from remaining effort and available work time before the deadline.
+      // isIndivisible -> can_be_divided, date -> end-of-day datetime.
       const response = await fetch("/api/predict", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tasks: tasks.map((task) => ({
-            ...task,
+            id: task.id,
+            name: task.name,
+            deadline: task.deadline,
+            canBeDivided: !task.isIndivisible,
             completionPercentage: task.completionPercentage ?? 0,
+            estimatedLength: task.estimatedLength,
           })),
           preferredTransportMode,
           startingLocation: homeLocation.trim(),
           workdayStartHour,
           workdayEndHour,
+          numSimulations: simulationCount,
         }),
       });
       if (!response.ok) {
@@ -326,7 +551,9 @@ export default function Dashboard({
       }
       // The backend runs the planning workflow and returns its review; turn it
       // into the Information cards and Suggestions shown on the right.
-      setPrediction(summarisePrediction((await response.json()) as PredictResponse));
+      const result = (await response.json()) as PredictResponse;
+      setPrediction(summarisePrediction(result));
+      setCompletedSimulationCount(result.review.original_prediction.num_simulations_per_scenario);
       setPredictionMessage("Prediction complete.");
     } catch (error) {
       setPredictionMessage(
@@ -341,10 +568,8 @@ export default function Dashboard({
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar-left">
-          <div className="brand-icon" aria-hidden="true">
-            <CheckCheck size={21} strokeWidth={2.8} />
-          </div>
-          <span className="brand-name">flowboard<span className="brand-period">.</span></span>
+          <Image className="brand-logo" src="/deltat.svg" alt="" width={40} height={37} priority />
+          <span className="brand-name">delta-t</span>
           <span className="topbar-divider" />
           <nav className="workspace-navigation" aria-label="Workspace">
             <button
@@ -379,15 +604,17 @@ export default function Dashboard({
               onClick={() => setCalendarMenuOpen((open) => !open)}
             >
               <CalendarDays size={17} />
-              <span>{calendarConnected ? "Calendar linked" : "Google Calendar"}</span>
-              {calendarConnected && <span className="connection-dot" />}
+              <span>{calendarStatusLabel}</span>
+              <span className={`connection-dot${calendarConnected ? "" : " disconnected"}`} />
               <ChevronDown size={15} />
             </button>
 
             {calendarMenuOpen && (
               <div className="calendar-dropdown" role="menu">
                 <div className="dropdown-eyebrow">GOOGLE CALENDAR</div>
-                {calendarConnected ? (
+                {calendarStatus === "checking" ? (
+                  <p className="dropdown-help">Checking the calendar connection for this browser…</p>
+                ) : calendarConnected ? (
                   <>
                     <div className="dropdown-state">
                       <span className="dropdown-success"><Check size={16} /></span>
@@ -406,25 +633,33 @@ export default function Dashboard({
                       Sign out of dashboard
                     </button>
                   </>
+                ) : calendarStatus === "error" ? (
+                  <p className="dropdown-help" role="alert">
+                    Could not check the calendar connection. Refresh the page to try again.
+                  </p>
                 ) : (
                   <>
                     <p className="dropdown-help">
-                        "Connect your Google account with read-only Calendar events permission."
+                      {calendarConfigured
+                        ? "Connect your Google account to enable read-only Calendar access."
+                        : "Calendar connection is not configured yet. Add Google OAuth credentials to enable it."}
                     </p>
-                    <button
-                      className="dropdown-action"
-                      type="button"
-                      role="menuitem"
-                      onClick={() => { window.location.href = "/auth/google";}}
-                    >
-                      <Link2 size={16} /> Connect Google Calendar
-                    </button>
+                    {calendarConfigured && (
+                      <button
+                        className="dropdown-action"
+                        type="button"
+                        role="menuitem"
+                        onClick={() => { window.location.href = "/auth/google";}}
+                      >
+                        <Link2 size={16} /> Connect Google Calendar
+                      </button>
+                    )}
                   </>
                 )}
               </div>
             )}
           </div>
-          <div className="avatar" aria-label="Personal workspace">F</div>
+          <div className="avatar" aria-label="Personal workspace">Δt</div>
         </div>
       </header>
 
@@ -433,7 +668,7 @@ export default function Dashboard({
           <div>
             <span className="eyebrow">
               <span className="eyebrow-dot" />
-              {activeTab === "dashboard" ? "YOUR PRODUCTIVITY HUB" : "PREFERENCES"}
+              {activeTab === "dashboard" ? "YOUR DAY, SIMULATED" : "PREFERENCES"}
             </span>
             <h1>
               {activeTab === "dashboard" ? "Your dashboard" : "Settings"}
@@ -449,15 +684,15 @@ export default function Dashboard({
 
         <style>{`
           .dashboard-grid.prediction-layout {
-            grid-template-columns: minmax(0, 1fr) 144px minmax(0, 1fr);
-            gap: 14px;
+            grid-template-columns: minmax(0, 1fr) minmax(210px, 250px) minmax(0, 1fr);
+            gap: 18px;
           }
           .prediction-middle {
             display: flex;
             flex-direction: column;
             justify-content: center;
-            align-items: center;
-            gap: 12px;
+            align-items: stretch;
+            gap: 16px;
             min-width: 0;
           }
           .prediction-start-button {
@@ -468,8 +703,8 @@ export default function Dashboard({
             width: 100%;
             border: 0;
             border-radius: 12px;
-            padding: 14px 10px;
-            font-size: 12px;
+            padding: 14px 16px;
+            font-size: 13px;
             font-weight: 800;
             color: white;
             background: linear-gradient(145deg, #806df3, #705ae6);
@@ -479,8 +714,18 @@ export default function Dashboard({
             color: #737b92;
             font-size: 11px;
             line-height: 1.5;
-            text-align: center;
             overflow-wrap: anywhere;
+          }
+          @media (max-width: 1050px) and (min-width: 761px) {
+            .dashboard-grid.prediction-layout {
+              grid-template-columns: minmax(0, 1fr) minmax(180px, 210px) minmax(0, 1fr);
+              gap: 10px;
+            }
+          }
+          @media (max-width: 760px) {
+            .dashboard-grid.prediction-layout { display: flex; flex-direction: column; }
+            .prediction-middle { padding: 0 12px; }
+            .prediction-start-button { width: min(100%, 360px); align-self: center; }
           }
           .transport-preference {
             display: flex;
@@ -591,18 +836,6 @@ export default function Dashboard({
           .task-edit-progress .completion-field-label {
             font-size: 11px;
           }
-          @media (max-width: 1050px) and (min-width: 761px) {
-            .dashboard-grid.prediction-layout {
-              grid-template-columns: minmax(0, 1fr) 112px minmax(0, 1fr);
-              gap: 10px;
-            }
-            .prediction-start-button { flex-direction: column; text-align: center; }
-          }
-          @media (max-width: 760px) {
-            .dashboard-grid.prediction-layout { display: flex; flex-direction: column; }
-            .prediction-middle { padding: 0 12px; }
-            .prediction-start-button { width: min(100%, 260px); }
-          }
         `}</style>
         {activeTab === "dashboard" ? (
         <div className="dashboard-grid prediction-layout">
@@ -639,29 +872,15 @@ export default function Dashboard({
                   required
                   autoFocus
                 />
-                <div className="field-grid">
-                  <div>
-                    <label htmlFor="task-deadline">Deadline</label>
-                    <input
-                      id="task-deadline"
-                      type="date"
-                      value={deadline}
-                      onChange={(event) => setDeadline(event.target.value)}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="task-priority">Priority label</label>
-                    <select
-                      id="task-priority"
-                      value={priority}
-                      onChange={(event) => setPriority(event.target.value as Priority)}
-                    >
-                      <option value="low">Low priority</option>
-                      <option value="medium">Medium priority</option>
-                      <option value="high">High priority</option>
-                    </select>
-                  </div>
+                <div>
+                  <label htmlFor="task-deadline">Deadline</label>
+                  <input
+                    id="task-deadline"
+                    type="date"
+                    value={deadline}
+                    onChange={(event) => setDeadline(event.target.value)}
+                    required
+                  />
                 </div>
                 <div className="completion-field">
                   <label htmlFor="task-estimated-length">Estimated length (minutes)</label>
@@ -697,10 +916,10 @@ export default function Dashboard({
                   <input
                     id="task-divide"
                     type="checkbox"
-                    checked={canBeDivided}
-                    onChange={(event) => setCanBeDivided(event.target.checked)}
+                    checked={isIndivisible}
+                    onChange={(event) => setIsIndivisible(event.target.checked)}
                   />
-                  <span>This task can be divided</span>
+                  <span>Must be completed in one sitting</span>
                 </label>
                 <div className="form-footer">
                   <button type="button" className="plain-button" onClick={() => setTaskFormOpen(false)}>Cancel</button>
@@ -720,14 +939,32 @@ export default function Dashboard({
               ) : (
                 tasks.map((task) => (
                   <div className="task-row" key={task.id}>
-                    <span
-                      className={`priority-dot priority-${task.priority}`}
-                      title={`${task.priority} priority${task.canBeDivided ? "; can be divided" : ""}`}
-                      aria-label={`${task.priority} priority`}
-                    />
                     <div className="task-content">
                       <span className="task-name">{task.name}</span>
                       <span className="task-deadline"><CalendarDays size={13} /> {formatDeadline(task.deadline)}</span>
+                      <div className="task-progress-inline">
+                        <label className="task-progress-label" htmlFor={`task-progress-${task.id}`}>
+                          <span>Progress</span>
+                          <output htmlFor={`task-progress-${task.id}`}>
+                            {task.completionPercentage ?? 0}%
+                          </output>
+                        </label>
+                        <input
+                          id={`task-progress-${task.id}`}
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={task.completionPercentage ?? 0}
+                          onChange={(event) =>
+                            updateTask(task.id, {
+                              completionPercentage: event.currentTarget.valueAsNumber,
+                            })
+                          }
+                          aria-label={`Task completion percentage for ${task.name}`}
+                          aria-valuetext={`${task.completionPercentage ?? 0}% complete`}
+                        />
+                      </div>
                       {editingTaskId === task.id && (
                         <div className="task-edit-controls">
                           <label>
@@ -742,18 +979,6 @@ export default function Dashboard({
                                 if (event.target.value) updateTask(task.id, { deadline: event.target.value });
                               }}
                             />
-                          </label>
-                          <label>
-                            Priority
-                            <select
-                              aria-label={`Priority for ${task.name}`}
-                              value={task.priority}
-                              onChange={(event) => updateTask(task.id, { priority: event.target.value as Priority })}
-                            >
-                              <option value="low">Low</option>
-                              <option value="medium">Medium</option>
-                              <option value="high">High</option>
-                            </select>
                           </label>
                           <label>
                             Estimated length (minutes)
@@ -775,31 +1000,12 @@ export default function Dashboard({
                           <label className="task-edit-checkbox">
                             <input
                               type="checkbox"
-                              aria-label={`This task can be divided: ${task.name}`}
-                              checked={task.canBeDivided}
-                              onChange={(event) => updateTask(task.id, { canBeDivided: event.target.checked })}
+                              aria-label={`Must be completed in one sitting: ${task.name}`}
+                              checked={task.isIndivisible}
+                              onChange={(event) => updateTask(task.id, { isIndivisible: event.target.checked })}
                             />
-                            This task can be divided
+                            Must be completed in one sitting
                           </label>
-                          <div className="task-edit-progress">
-                            <label className="completion-field-label" htmlFor={`task-completion-${task.id}`}>
-                              <span>Task completion</span>
-                              <output htmlFor={`task-completion-${task.id}`}>
-                                {task.completionPercentage ?? 0}%
-                              </output>
-                            </label>
-                            <input
-                              id={`task-completion-${task.id}`}
-                              type="range"
-                              min={0}
-                              max={100}
-                              step={1}
-                              value={task.completionPercentage ?? 0}
-                              onChange={(event) => updateTask(task.id, { completionPercentage: event.currentTarget.valueAsNumber })}
-                              aria-label={`Task completion percentage for ${task.name}`}
-                              aria-valuetext={`${task.completionPercentage ?? 0}% complete`}
-                            />
-                          </div>
                           <button type="button" className="plain-button" onClick={() => setEditingTaskId(null)}>Done</button>
                         </div>
                       )}
@@ -807,7 +1013,7 @@ export default function Dashboard({
                     <button
                       type="button"
                       className="icon-button"
-                      aria-label={`Edit priority, deadline, divisibility and completion for ${task.name}`}
+                      aria-label={`Edit deadline, divisibility and completion for ${task.name}`}
                       aria-expanded={editingTaskId === task.id}
                       onClick={() => setEditingTaskId((current) => current === task.id ? null : task.id)}
                     ><Pencil size={16} /></button>
@@ -821,21 +1027,53 @@ export default function Dashboard({
                 ))
               )}
             </div>
-            <div className="panel-bottom"><span><span className="legend-dot" /> Coloured dots indicate priority</span></div>
+            <div className="panel-bottom"><span>Simulation priority is calculated automatically from deadlines and remaining effort.</span></div>
           </section>
 
           <div className="prediction-middle">
-            <button
-              type="button"
-              className="prediction-start-button"
-              onClick={() => void startPrediction()}
-              disabled={predictionLoading || tasks.length === 0}
-              aria-label="Start Prediction using current task list"
-            >
-              <Play size={17} />
-              {predictionLoading ? "Sending..." : "Start Prediction"}
-            </button>
-            {predictionMessage && <p className="prediction-status" role="status">{predictionMessage}</p>}
+            <section className={`simulation-console${predictionLoading ? " is-running" : ""}`} aria-label="Simulation runner">
+              <div className={`simulation-visual${predictionLoading ? " is-running" : ""}`} aria-hidden="true">
+                <span className="simulation-orbit orbit-one" />
+                <span className="simulation-orbit orbit-two" />
+                <span className="simulation-core"><Sparkles size={21} /></span>
+              </div>
+              <div className="simulation-copy">
+                <span className="simulation-kicker">
+                  <span className={`simulation-live-dot${predictionLoading ? " is-running" : ""}`} />
+                  {predictionLoading ? "SIMULATION IN PROGRESS" : completedSimulationCount !== null ? "LATEST SIMULATION" : "MONTE CARLO ENGINE"}
+                </span>
+                <h2>
+                  {predictionLoading
+                    ? "Exploring outcomes"
+                    : completedSimulationCount !== null
+                      ? "Results are ready"
+                      : "See how your day could unfold"}
+                </h2>
+                <p>
+                  {predictionLoading
+                    ? `Evaluating ${simulationCount.toLocaleString()} simulations per scenario across your original and adjusted schedule.`
+                    : completedSimulationCount !== null
+                      ? `${completedSimulationCount.toLocaleString()} simulations per scenario completed. Review the risk summary and suggested changes.`
+                      : `Compare your schedule across ${simulationCount.toLocaleString()} possible outcomes.`}
+                </p>
+              </div>
+              <div className="simulation-count">
+                <span>SIMULATIONS / SCENARIO</span>
+                <strong>{simulationCount.toLocaleString()}</strong>
+              </div>
+              <button
+                type="button"
+                className="prediction-start-button"
+                onClick={() => void startPrediction()}
+                disabled={predictionLoading || tasks.length === 0}
+                aria-label="Start simulation using current task list"
+              >
+                <Play size={17} />
+                {predictionLoading ? "Running simulation..." : "Run simulation"}
+              </button>
+              {predictionMessage && <p className="prediction-status" role="status">{predictionMessage}</p>}
+              <p className="simulation-footnote">A fresh set of scenarios is evaluated for each prediction.</p>
+            </section>
           </div>
 
           <div className="right-stack">
@@ -924,6 +1162,25 @@ export default function Dashboard({
                 />
                 <span className="settings-help">
                   The simulator uses this as the starting point for your day.
+                </span>
+              </label>
+              <label className="transport-preference" htmlFor="simulation-count">
+                Simulations per scenario
+                <input
+                  id="simulation-count"
+                  type="number"
+                  min={1}
+                  max={1000000}
+                  step={1000}
+                  value={simulationCount}
+                  onChange={(event) =>
+                    setSimulationCount(event.currentTarget.value === "" ? 0 : event.currentTarget.valueAsNumber)
+                  }
+                  aria-describedby="simulation-count-help"
+                />
+                <span className="settings-help" id="simulation-count-help">
+                  The default is 10,000. Higher counts can improve stability but take longer to run.
+                  Allowed range: 1 to 1,000,000.
                 </span>
               </label>
               <div className="work-hours-setting">

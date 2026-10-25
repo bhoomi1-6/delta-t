@@ -40,9 +40,9 @@ class Task(BaseModel):
     title: str
     estimated_length: int = Field(gt=0)  # minutes
     completion_pct: float = Field(ge=0, le=100)
-    can_be_divided: bool = False  # Otherwise, remaining work must fit one work block.
+    can_be_divided: bool = True
     deadline: datetime
-    priority: int = Field(ge=0, le=2)  # 0 = high, 1 = medium, 2 = low
+    priority: int = Field(ge=0)  # Lower values run first in the simulation.
 
 
 class Disruption(BaseModel):

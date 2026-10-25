@@ -82,12 +82,43 @@ def _simulation_inputs(
             display_names[simulation_title] = event.title
     events.sort(key=lambda event: event.start_time)
 
-    task_order = {
-        item.task_id: rank
-        for rank, item in enumerate(
-            sorted(task_schedule or [], key=lambda item: item.start_time)
-        )
-    }
+    if task_schedule is not None:
+        task_order = {
+            item.task_id: rank
+            for rank, item in enumerate(
+                sorted(task_schedule, key=lambda item: item.start_time)
+            )
+        }
+    else:
+        workday_start_hour = context.get("workday_start_hour", 8)
+        workday_end_hour = context.get("workday_end_hour", 19)
+
+        def task_urgency(task: PlanTask) -> tuple[float, datetime, float]:
+            deadline = (
+                _local_naive(task.deadline)
+                if task.deadline is not None
+                else base + simulation.SIMULATION_HORIZON
+            )
+            available_minutes, _ = _task_work_capacity(
+                base,
+                deadline,
+                events,
+                workday_start_hour,
+                workday_end_hour,
+            )
+            remaining_effort = task.estimated_length * (
+                1.0 - task.completion_pct / 100.0
+            )
+            return (
+                available_minutes - remaining_effort,
+                deadline,
+                -remaining_effort,
+            )
+
+        task_order = {
+            task.id: rank
+            for rank, task in enumerate(sorted(plan.tasks, key=task_urgency))
+        }
     task_ids: dict[str, str] = {}
     tasks = []
     for rank, task in enumerate(plan.tasks):
@@ -105,7 +136,7 @@ def _simulation_inputs(
                     if task.deadline is not None
                     else day_end
                 ),
-                priority=min(task_order.get(task.id, task.priority), 2),
+                priority=task_order[task.id],
                 can_be_divided=task.can_be_divided,
             )
         )

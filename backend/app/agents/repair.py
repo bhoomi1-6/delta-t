@@ -164,6 +164,9 @@ Hard constraints:
   exactly in schema fields; never use IDs in user-facing prose.
 - Preserve every event kind and every task deadline. Fixed user events must
   remain unchanged.
+- Tasks can be worked on across multiple sessions unless the original task
+  explicitly has can_be_divided set to false. Do not treat a task as requiring
+  one uninterrupted block otherwise.
 - Schedule task starts within the user's configured workday above. Avoid
   event/calendar conflicts and leave enough time for travel where route
   estimates are available. Do not place work after a task's deadline.

@@ -49,11 +49,7 @@ def cipher() -> Fernet:
 def flow(*, state=None, verifier=None) -> Flow:
     # Reuses your existing JSON containing a "web" OAuth client.
     # This is not a token JSON and must never be committed to Git.
-    credentials_file = Path(os.getenv(
-        "GOOGLE_CALENDAR_CREDENTIALS_FILE", "google-calendar-credentials.json"
-    ))
-    if not credentials_file.is_absolute():
-        credentials_file = Path(__file__).resolve().parents[2] / credentials_file
+    credentials_file = oauth_credentials_file()
     if not credentials_file.is_file():
         raise RuntimeError(f"OAuth client JSON not found: {credentials_file}")
     redirect_uri = os.getenv(
@@ -71,13 +67,21 @@ def flow(*, state=None, verifier=None) -> Flow:
 
 def google_client_id() -> str:
     import json as _json
-    credentials_file = Path(os.getenv(
-        "GOOGLE_CALENDAR_CREDENTIALS_FILE", "google-calendar-credentials.json"
-    ))
-    if not credentials_file.is_absolute():
-        credentials_file = Path(__file__).resolve().parents[2] / credentials_file
+    credentials_file = oauth_credentials_file()
     with credentials_file.open(encoding="utf-8") as handle:
         return _json.load(handle)["web"]["client_id"]
+
+
+def oauth_credentials_file() -> Path:
+    credentials_file = Path(
+        os.getenv(
+            "GOOGLE_CALENDAR_CREDENTIALS_FILE",
+            "google-calendar-credentials.json",
+        )
+    )
+    if not credentials_file.is_absolute():
+        credentials_file = Path(__file__).resolve().parents[2] / credentials_file
+    return credentials_file
 
 
 def current_session(request: Request) -> str | None:
@@ -135,11 +139,19 @@ def google_callback(request: Request, state: str | None = None, code: str | None
 @router.get("/api/calendar/account")
 def calendar_account(request: Request):
     session_id = current_session(request)
-    if not session_id:
-        return {"connected": False, "email": None}
-    with db_connection() as db:
-        row = db.execute("SELECT email FROM google_accounts WHERE session_id = ?", (session_id,)).fetchone()
-    return {"connected": bool(row), "email": row[0] if row else None}
+    row = None
+    if session_id:
+        with db_connection() as db:
+            row = db.execute(
+                "SELECT email FROM google_accounts WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+    return {
+        "configured": bool(os.getenv("OAUTH_ENCRYPTION_KEY"))
+        and oauth_credentials_file().is_file(),
+        "connected": bool(row),
+        "email": row[0] if row else None,
+    }
 
 
 @router.post("/api/calendar/disconnect")

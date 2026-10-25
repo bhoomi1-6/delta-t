@@ -213,3 +213,70 @@ button svg { flex-shrink: 0; }
 @media (prefers-reduced-motion: no-preference) {
   .primary-button, .outline-button, .calendar-menu-trigger, .info-card, .icon-button { transition: background .15s, border-color .15s, color .15s; }
 }
+
+.brand-logo { display: block; width: 39px; height: 37px; object-fit: contain; }
+.brand-name { text-transform: lowercase; }
+.connection-dot.disconnected { background: #c3c7d3; }
+.calendar-menu-trigger:not(.connected) { color: #687087; }
+.task-row { align-items: flex-start; }
+.task-row > .priority-dot { margin-top: 5px; }
+.task-content { gap: 8px; }
+.task-progress-inline { width: min(100%, 280px); display: grid; gap: 4px; margin-top: 1px; }
+.task-progress-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #9096a8; font-size: 10px; font-weight: 650; }
+.task-progress-label output { color: #705ae6; font-variant-numeric: tabular-nums; }
+.task-progress-inline input[type="range"] { display: block; width: 100%; height: 14px; margin: 0; accent-color: #705ae6; cursor: pointer; }
+.task-edit-controls { width: 100%; }
+.task-edit-controls label { min-width: min(100%, 145px); }
+.task-edit-controls input[type="date"], .task-edit-controls input[type="number"], .task-edit-controls select { width: min(100%, 160px); }
+.dashboard-grid.prediction-layout { align-items: stretch; }
+.simulation-console { display: flex; flex-direction: column; align-items: flex-start; gap: 17px; padding: 25px 21px; border: 1px solid #e7e6f1; border-radius: 20px; background: linear-gradient(165deg, #fff 10%, #faf9ff 100%); box-shadow: 0 14px 40px #2927460d; }
+.simulation-visual { position: relative; width: 84px; height: 84px; align-self: center; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(circle, #f4f1ff 0 36%, transparent 37%); }
+.simulation-orbit { position: absolute; inset: 8px; border: 1px solid #ddd7ff; border-radius: 50%; }
+.orbit-two { inset: 17px 2px; transform: rotate(-36deg); border-color: #e8dcce; }
+.simulation-core { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 14px; color: #705ae6; background: #eeeaff; }
+.simulation-kicker { display: flex; align-items: center; gap: 7px; color: #8c91a4; font-size: 9px; font-weight: 800; letter-spacing: 1px; }
+.simulation-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #c4c7d2; }
+.simulation-live-dot.is-running { background: #56b38b; }
+.simulation-copy h2 { margin: 9px 0 7px; color: #303852; font-size: 17px; letter-spacing: -.45px; line-height: 1.25; }
+.simulation-copy p { margin: 0; color: #858ba0; font-size: 11px; line-height: 1.65; }
+.simulation-count { width: 100%; padding: 12px 13px; border: 1px solid #eeeafc; border-radius: 12px; background: #f9f8ff; }
+.simulation-count span, .simulation-count strong { display: block; }
+.simulation-count span { color: #9892b2; font-size: 8px; font-weight: 800; letter-spacing: .9px; }
+.simulation-count strong { margin-top: 5px; color: #5446b2; font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -.7px; }
+.prediction-start-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; border: 0; border-radius: 11px; padding: 13px 14px; color: white; background: linear-gradient(145deg, #806df3, #705ae6); box-shadow: 0 6px 16px #8069e629; font-size: 12px; font-weight: 800; }
+.prediction-start-button:hover:not(:disabled) { background: #6450dc; }
+.simulation-console .prediction-status { margin: -8px 0 0; color: #646d84; font-size: 10px; line-height: 1.5; }
+.simulation-footnote { margin: -7px 0 0; color: #a4a8b7; font-size: 9px; line-height: 1.5; }
+.simulation-console.is-running { border-color: #d9d3ff; box-shadow: 0 14px 40px #6759dc16; }
+.transport-preference { display: flex; flex-direction: column; gap: 6px; width: 100%; color: #66708a; font-size: 12px; font-weight: 700; }
+.transport-preference select, .transport-preference input { width: 100%; min-width: 0; padding: 10px; border: 1px solid #e5e4ef; border-radius: 8px; background: white; color: #39415e; font-size: 13px; }
+.transport-preference .settings-help { margin: 0; }
+.task-edit-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-top: 7px; }
+.task-edit-controls label { display: flex; flex-direction: column; gap: 5px; color: #66708a; font-size: 10px; font-weight: 700; }
+.task-edit-controls input[type="date"], .task-edit-controls input[type="number"], .task-edit-controls select { max-width: 160px; padding: 7px; border: 1px solid #e5e4ef; border-radius: 8px; background: white; color: #39415e; font-size: 11px; }
+.task-edit-controls .task-edit-checkbox { flex-direction: row; align-items: center; gap: 7px; cursor: pointer; }
+.task-edit-controls .task-edit-checkbox input { width: 15px; height: 15px; margin: 0; accent-color: #705ae6; }
+.completion-field { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.completion-field-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #39415e; font-weight: 700; }
+.completion-field output { color: #705ae6; font-variant-numeric: tabular-nums; }
+.completion-field input[type="range"] { display: block; width: 100%; accent-color: #705ae6; cursor: pointer; }
+
+@media (max-width: 1050px) and (min-width: 761px) {
+  .simulation-console { padding: 20px 14px; }
+  .simulation-copy h2 { font-size: 15px; }
+}
+@media (max-width: 760px) {
+  .simulation-console { width: min(100%, 440px); align-self: center; }
+  .simulation-visual { width: 72px; height: 72px; }
+  .task-progress-inline { max-width: 100%; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .simulation-console.is-running .orbit-one { animation: simulation-spin 2.5s linear infinite; }
+  .simulation-console.is-running .orbit-two { animation: simulation-spin-reverse 3.5s linear infinite; }
+  .simulation-console.is-running .simulation-core { animation: simulation-pulse 1.8s ease-in-out infinite; }
+  .simulation-live-dot.is-running { animation: live-pulse 1.5s ease-out infinite; }
+  @keyframes simulation-spin { to { transform: rotate(360deg); } }
+  @keyframes simulation-spin-reverse { to { transform: rotate(-396deg); } }
+  @keyframes simulation-pulse { 50% { box-shadow: 0 0 0 8px #eeeaff; } }
+  @keyframes live-pulse { 50% { box-shadow: 0 0 0 4px #56b38b2b; } }
+}

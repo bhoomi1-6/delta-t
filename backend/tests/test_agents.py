@@ -93,6 +93,85 @@ def test_predictor_sorts_events_by_model_start_time() -> None:
     assert all("id" not in risk for risk in named_risks)
 
 
+def test_original_simulation_prioritizes_tasks_by_deadline_and_effort() -> None:
+    base = datetime(2026, 10, 25)
+    plan = Plan(
+        events=[],
+        tasks=[
+            PlanTask(
+                id="critical-slack",
+                title="Critical task",
+                estimated_length=5000,
+                completion_pct=0,
+                deadline=base.replace(day=31, hour=17),
+            ),
+            PlanTask(
+                id="near-deadline",
+                title="Short task",
+                estimated_length=200,
+                completion_pct=0,
+                deadline=base.replace(day=26, hour=17),
+            ),
+            PlanTask(
+                id="tight-slack",
+                title="Long task",
+                estimated_length=3800,
+                completion_pct=0,
+                deadline=base.replace(day=31, hour=17),
+            ),
+            PlanTask(
+                id="later-deadline",
+                title="Later task",
+                estimated_length=200,
+                completion_pct=0,
+                deadline=base.replace(day=28, hour=17),
+            ),
+        ],
+    )
+    context = {
+        "calendar_commitments": [],
+        "conditions": [],
+        "starting_location": "Home",
+        "day_start": base,
+        "workday_start_hour": 8,
+        "workday_end_hour": 19,
+    }
+
+    inputs = predictor._simulation_inputs(
+        plan,
+        context,
+        task_schedule=None,
+        day_start=base,
+    )
+
+    assert [task.id for task in sorted(inputs.tasks, key=lambda task: task.priority)] == [
+        "critical-slack",
+        "tight-slack",
+        "near-deadline",
+        "later-deadline",
+    ]
+    assert max(task.priority for task in inputs.tasks) == 3
+
+    repaired_inputs = predictor._simulation_inputs(
+        plan,
+        context,
+        task_schedule=[
+            TaskScheduleItem(task_id="later-deadline", start_time=0, reasoning=""),
+            TaskScheduleItem(task_id="near-deadline", start_time=10, reasoning=""),
+            TaskScheduleItem(task_id="tight-slack", start_time=20, reasoning=""),
+            TaskScheduleItem(task_id="critical-slack", start_time=30, reasoning=""),
+        ],
+        day_start=base,
+    )
+
+    assert [task.id for task in sorted(repaired_inputs.tasks, key=lambda task: task.priority)] == [
+        "later-deadline",
+        "near-deadline",
+        "tight-slack",
+        "critical-slack",
+    ]
+
+
 def test_predictor_reports_task_capacity_constraints_without_ids(monkeypatch) -> None:
     monkeypatch.setattr(
         predictor.simulation,
@@ -122,7 +201,6 @@ def test_predictor_reports_task_capacity_constraints_without_ids(monkeypatch) ->
                 completion_pct=0,
                 can_be_divided=False,
                 deadline=datetime(2026, 10, 25, 12),
-                priority=1,
             )
         ],
     )
@@ -172,7 +250,6 @@ def test_repair_retries_proposal_with_mismatched_event_ids(
                 estimated_length=60,
                 completion_pct=0,
                 deadline=900,
-                priority=1,
             )
         ],
     )
