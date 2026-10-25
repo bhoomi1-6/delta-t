@@ -29,6 +29,8 @@ type Task = {
   deadline: string; // Local YYYY-MM-DD date, without timezone shifting.
   priority: Priority;
   canBeDivided: boolean;
+  completionPercentage: number; // 0-100, not a completed/not-completed flag.
+  estimatedLength: number | null; // Required before predicting; legacy tasks may lack it.
 };
 
 export type InfoCard = {
@@ -108,10 +110,13 @@ export default function Dashboard({
   const [deadline, setDeadline] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
   const [canBeDivided, setCanBeDivided] = useState(false);
+  const [completionPercentage, setCompletionPercentage] = useState(0);
+  const [estimatedLength, setEstimatedLength] = useState("");
 
   function addTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!taskName.trim() || !deadline) return;
+    const duration = Number(estimatedLength);
+    if (!taskName.trim() || !deadline || !Number.isSafeInteger(duration) || duration <= 0) return;
 
     setTasks((existing) => [
       ...existing,
@@ -121,12 +126,16 @@ export default function Dashboard({
         deadline,
         priority,
         canBeDivided,
+        completionPercentage,
+        estimatedLength: duration,
       },
     ]);
     setTaskName("");
     setDeadline("");
     setPriority("medium");
     setCanBeDivided(false);
+    setCompletionPercentage(0);
+    setEstimatedLength("");
     setTaskFormOpen(false);
   }
 
@@ -134,9 +143,15 @@ export default function Dashboard({
     setTasks((existing) => existing.filter((task) => task.id !== id));
   }
 
-  function updateTask(id: string, changes: Partial<Pick<Task, "deadline" | "priority" | "canBeDivided">>) {
+  function updateTask(id: string, changes: Partial<Pick<Task, "deadline" | "priority" | "canBeDivided" | "completionPercentage" | "estimatedLength">>) {
     // Never allow an edit to erase the required deadline.
     if (changes.deadline !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(changes.deadline)) return;
+    if (changes.completionPercentage !== undefined) {
+      if (!Number.isInteger(changes.completionPercentage) || changes.completionPercentage < 0 || changes.completionPercentage > 100) return;
+    }
+    if (changes.estimatedLength !== undefined && changes.estimatedLength !== null) {
+      if (!Number.isSafeInteger(changes.estimatedLength) || changes.estimatedLength <= 0) return;
+    }
     setTasks((existing) =>
       existing.map((task) => task.id === id ? { ...task, ...changes } : task)
     );
@@ -144,19 +159,40 @@ export default function Dashboard({
 
   async function startPrediction() {
     if (predictionLoading) return;
-    setPredictionLoading(true);
     setPredictionMessage("");
+
+    // Older tasks in localStorage do not have an estimated length. Never
+    // invent a duration: users must provide one before sending to Python.
+    if (tasks.some((task) =>
+      typeof task.estimatedLength !== "number" ||
+      !Number.isSafeInteger(task.estimatedLength) ||
+      task.estimatedLength <= 0
+    )) {
+      setPredictionMessage("Add an estimated length (minutes) to every task before predicting.");
+      return;
+    }
+
+    setPredictionLoading(true);
     try {
-      // BACKEND INTEGRATION: Create POST /api/predict to receive the current tasks.
-      // Each task includes id, name, deadline, priority, and canBeDivided.
-      // You can use the response to generate Information cards and Suggestions.
+      // Python converts dashboard fields into engine Task objects:
+      // name -> title, completionPercentage -> completion_pct,
+      // estimatedLength -> estimated_length, priority label -> 0/1/2,
+      // canBeDivided -> can_be_divided, date -> end-of-day datetime.
       const response = await fetch("/api/predict", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tasks }),
+        body: JSON.stringify({
+          tasks: tasks.map((task) => ({
+            ...task,
+            completionPercentage: task.completionPercentage ?? 0,
+          })),
+        }),
       });
       if (!response.ok) throw new Error(`Prediction request failed (${response.status})`);
-      setPredictionMessage("Task list sent to the prediction backend.");
+      const data: { success: boolean; tasks: unknown[] } = await response.json();
+      setPredictionMessage(`${data.tasks.length} task(s) sent to the prediction backend.`);
+      // The backend now returns Task objects, NOT information cards.
+      // You can use data.tasks later when displaying prediction results.
     } catch (error) {
       setPredictionMessage(
         error instanceof Error ? error.message : "Could not start prediction."
@@ -302,7 +338,7 @@ export default function Dashboard({
             font-weight: 700;
             color: #66708a;
           }
-          .task-edit-controls input[type="date"], .task-edit-controls select {
+          .task-edit-controls input[type="date"], .task-edit-controls input[type="number"], .task-edit-controls select {
             min-width: 0;
             max-width: 160px;
             padding: 7px;
@@ -323,6 +359,42 @@ export default function Dashboard({
             height: 15px;
             margin: 0;
             accent-color: #705ae6;
+          }
+          .completion-field {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+          }
+          .completion-field-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            color: #39415e;
+            font-weight: 700;
+          }
+          .completion-field output,
+          .task-edit-progress output {
+            font-variant-numeric: tabular-nums;
+            color: #705ae6;
+          }
+          .completion-field input[type="range"],
+          .task-edit-progress input[type="range"] {
+            display: block;
+            width: 100%;
+            accent-color: #705ae6;
+            cursor: pointer;
+          }
+          .task-edit-controls .task-edit-progress {
+            flex: 1 0 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 7px;
+          }
+          .task-edit-progress .completion-field-label {
+            font-size: 11px;
           }
           @media (max-width: 1050px) and (min-width: 761px) {
             .dashboard-grid.prediction-layout {
@@ -395,6 +467,36 @@ export default function Dashboard({
                     </select>
                   </div>
                 </div>
+                <div className="completion-field">
+                  <label htmlFor="task-estimated-length">Estimated length (minutes)</label>
+                  <input
+                    id="task-estimated-length"
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder="e.g. 60"
+                    value={estimatedLength}
+                    onChange={(event) => setEstimatedLength(event.target.value)}
+                    required
+                  />
+                </div>
+                <div className="completion-field">
+                  <label className="completion-field-label" htmlFor="task-completion">
+                    <span>Task completion</span>
+                    <output htmlFor="task-completion">{completionPercentage}%</output>
+                  </label>
+                  <input
+                    id="task-completion"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={completionPercentage}
+                    onChange={(event) => setCompletionPercentage(event.currentTarget.valueAsNumber)}
+                    aria-label="Task completion percentage"
+                    aria-valuetext={`${completionPercentage}% complete`}
+                  />
+                </div>
                 <label className="check-row" htmlFor="task-divide">
                   <input
                     id="task-divide"
@@ -457,6 +559,23 @@ export default function Dashboard({
                               <option value="high">High</option>
                             </select>
                           </label>
+                          <label>
+                            Estimated length (minutes)
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              value={task.estimatedLength ?? ""}
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                updateTask(task.id, {
+                                  estimatedLength: value === "" ? null : Number(value),
+                                });
+                              }}
+                              aria-label={`Estimated length in minutes for ${task.name}`}
+                              required
+                            />
+                          </label>
                           <label className="task-edit-checkbox">
                             <input
                               type="checkbox"
@@ -466,6 +585,25 @@ export default function Dashboard({
                             />
                             This task can be divided
                           </label>
+                          <div className="task-edit-progress">
+                            <label className="completion-field-label" htmlFor={`task-completion-${task.id}`}>
+                              <span>Task completion</span>
+                              <output htmlFor={`task-completion-${task.id}`}>
+                                {task.completionPercentage ?? 0}%
+                              </output>
+                            </label>
+                            <input
+                              id={`task-completion-${task.id}`}
+                              type="range"
+                              min={0}
+                              max={100}
+                              step={1}
+                              value={task.completionPercentage ?? 0}
+                              onChange={(event) => updateTask(task.id, { completionPercentage: event.currentTarget.valueAsNumber })}
+                              aria-label={`Task completion percentage for ${task.name}`}
+                              aria-valuetext={`${task.completionPercentage ?? 0}% complete`}
+                            />
+                          </div>
                           <button type="button" className="plain-button" onClick={() => setEditingTaskId(null)}>Done</button>
                         </div>
                       )}
@@ -473,7 +611,7 @@ export default function Dashboard({
                     <button
                       type="button"
                       className="icon-button"
-                      aria-label={`Edit priority, deadline and divisibility for ${task.name}`}
+                      aria-label={`Edit priority, deadline, divisibility and completion for ${task.name}`}
                       aria-expanded={editingTaskId === task.id}
                       onClick={() => setEditingTaskId((current) => current === task.id ? null : task.id)}
                     ><Pencil size={16} /></button>
